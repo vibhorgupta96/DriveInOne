@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DriveInOne</string>
+    <!-- Replace with your actual Google Web Client ID -->
+    <string name="default_web_client_id">YOUR_GOOGLE_WEB_CLIENT_ID</string>
+</resources>
