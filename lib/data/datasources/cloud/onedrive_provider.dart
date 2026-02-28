@@ -86,9 +86,9 @@ class OneDriveProvider extends CloudProvider {
   }
 
   @override
-  Future<void> refreshTokenIfNeeded() async {
-    if (!isTokenExpired && accessToken != null) return;
-    if (_refreshToken == null) {
+  Future<void> refreshTokenIfNeeded({bool force = false}) async {
+    if (!force && !isTokenExpired && accessToken != null) return;
+    if (refreshToken == null) {
       throw const AuthException(
           message: 'No refresh token available for OneDrive');
     }
@@ -99,7 +99,7 @@ class OneDriveProvider extends CloudProvider {
           ProviderConstants.microsoftClientId,
           ProviderConstants.microsoftRedirectUri,
           discoveryUrl: ProviderConstants.microsoftDiscoveryUrl,
-          refreshToken: _refreshToken,
+          refreshToken: refreshToken,
           scopes: ProviderConstants.microsoftScopes,
         ),
       );
@@ -110,7 +110,7 @@ class OneDriveProvider extends CloudProvider {
 
       setTokens(
         accessToken: result.accessToken!,
-        refreshToken: result.refreshToken ?? _refreshToken,
+        refreshToken: result.refreshToken ?? refreshToken,
         expiry: result.accessTokenExpirationDateTime,
       );
     } catch (e) {
@@ -232,13 +232,14 @@ class OneDriveProvider extends CloudProvider {
       timestamp = DateTime.now();
     }
 
+    final remoteId = item['id'] as String;
     return MediaItemModel(
-      remoteId: item['id'] as String,
+      remoteId: remoteId,
       remotePath: item['parentReference']?['path'] as String?,
       fileName: item['name'] as String? ?? 'Untitled',
       mimeType: mimeType,
       mediaType: MediaItemModel.mediaTypeFromMime(mimeType),
-      thumbnailUrl: null, // Fetched separately via getThumbnailUrl
+      thumbnailUrl: '${ProviderConstants.graphBaseUrl}/me/drive/items/$remoteId/thumbnails/0/large/content',
       fullSizeUrl: item['@microsoft.graph.downloadUrl'] as String?,
       width: image?['width'] as int? ?? video?['width'] as int?,
       height: image?['height'] as int? ?? video?['height'] as int?,

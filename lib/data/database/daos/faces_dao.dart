@@ -16,6 +16,9 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
   Future<List<Face>> getFacesByMedia(String mediaItemId) =>
       (select(faces)..where((f) => f.mediaItemId.equals(mediaItemId))).get();
 
+  Future<Face?> getFaceById(String faceId) =>
+      (select(faces)..where((f) => f.id.equals(faceId))).getSingleOrNull();
+
   Future<List<Face>> getAllUnclusteredFaces() =>
       (select(faces)..where((f) => f.clusterId.isNull())).get();
 
@@ -47,6 +50,20 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
           FaceClustersCompanion(
               centroidEmbedding: Value(centroid), faceCount: Value(count)));
 
+  Future<void> updateClusterStats(
+    String clusterId, {
+    required Uint8List centroid,
+    required int count,
+    required String? representativeFaceId,
+  }) =>
+      (update(faceClusters)..where((c) => c.id.equals(clusterId))).write(
+        FaceClustersCompanion(
+          centroidEmbedding: Value(centroid),
+          faceCount: Value(count),
+          representativeFaceId: Value(representativeFaceId),
+        ),
+      );
+
   Future<List<String>> getMediaIdsForCluster(String clusterId) async {
     final query = select(faces)..where((f) => f.clusterId.equals(clusterId));
     final results = await query.get();
@@ -61,4 +78,23 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
 
   Future<FaceCluster?> getClusterById(String id) =>
       (select(faceClusters)..where((c) => c.id.equals(id))).getSingleOrNull();
+
+  Future<int> getFaceCount() async {
+    final count = countAll();
+    final query = selectOnly(faces)..addColumns([count]);
+    final result = await query.getSingle();
+    return result.read(count) ?? 0;
+  }
+
+  Future<int> getClusterCount() async {
+    final count = countAll();
+    final query = selectOnly(faceClusters)..addColumns([count]);
+    final result = await query.getSingle();
+    return result.read(count) ?? 0;
+  }
+
+  Future<void> deleteAllFacesAndClusters() async {
+    await delete(faces).go();
+    await delete(faceClusters).go();
+  }
 }

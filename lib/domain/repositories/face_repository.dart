@@ -8,5 +8,9 @@ abstract class FaceRepository {
   Future<List<FaceClusterEntity>> getClusters();
   Stream<List<FaceClusterEntity>> watchClusters();
   Future<List<MediaItemEntity>> getMediaForCluster(String clusterId);
+  Future<MediaItemEntity?> getRepresentativeMediaForCluster(String clusterId);
+  Future<Uint8List?> getRepresentativeFaceThumbnail(String clusterId);
   Future<void> renameCluster(String clusterId, String name);
+  Future<void> resetAllFaceData();
+  Future<Map<String, int>> getDiagnosticCounts();
 }

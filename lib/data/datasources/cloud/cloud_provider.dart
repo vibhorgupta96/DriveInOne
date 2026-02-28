@@ -12,13 +12,15 @@ abstract class CloudProvider {
   Future<Map<String, String>> getAuthHeaders();
   Future<String> getVideoStreamUrl(String fileId);
   Future<String> getThumbnailUrl(String fileId);
-  Future<void> refreshTokenIfNeeded();
+  Future<void> refreshTokenIfNeeded({bool force = false});
 
   String? _accessToken;
   String? _refreshToken;
   DateTime? _tokenExpiry;
 
   String? get accessToken => _accessToken;
+  String? get refreshToken => _refreshToken;
+  DateTime? get tokenExpiry => _tokenExpiry;
 
   bool get isTokenExpired {
     if (_tokenExpiry == null) return true;
@@ -33,8 +35,8 @@ abstract class CloudProvider {
     DateTime? expiry,
   }) {
     _accessToken = accessToken;
-    _refreshToken = refreshToken;
-    _tokenExpiry = expiry;
+    if (refreshToken != null) _refreshToken = refreshToken;
+    if (expiry != null) _tokenExpiry = expiry;
   }
 
   void clearTokens() {

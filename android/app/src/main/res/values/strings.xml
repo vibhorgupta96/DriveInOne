@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">DriveInOne</string>
     <!-- Replace with your actual Google Web Client ID -->
-    <string name="default_web_client_id">YOUR_GOOGLE_WEB_CLIENT_ID</string>
+    <string name="default_web_client_id">344616329242-enqb6vgvdmsfhjd5lqruu1m9u2srtaim.apps.googleusercontent.com</string>
 </resources>

@@ -64,8 +64,7 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
       (select(mediaItems)
             ..where((m) =>
                 m.isDeleted.equals(false) &
-                m.facesProcessed.equals(false) &
-                m.thumbnailUrl.isNotNull())
+                m.facesProcessed.equals(false))
             ..limit(limit))
           .get();
 
@@ -84,4 +83,41 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
 
   Future<List<MediaItem>> getMediaItemsByIds(List<String> ids) =>
       (select(mediaItems)..where((m) => m.id.isIn(ids))).get();
+
+  Future<int> getProcessedFacesCount() async {
+    final count = countAll();
+    final query = selectOnly(mediaItems)
+      ..where(mediaItems.isDeleted.equals(false) & mediaItems.facesProcessed.equals(true))
+      ..addColumns([count]);
+    final result = await query.getSingle();
+    return result.read(count) ?? 0;
+  }
+
+  Future<Map<String, ({int photos, int videos})>>
+      getMediaStatsByAccount() async {
+    final results = await customSelect(
+      'SELECT account_id, media_type, COUNT(*) as cnt '
+      'FROM media_items '
+      'WHERE is_deleted = 0 '
+      'GROUP BY account_id, media_type',
+    ).get();
+
+    final stats = <String, ({int photos, int videos})>{};
+    for (final row in results) {
+      final accountId = row.read<String>('account_id');
+      final mediaType = row.read<int>('media_type');
+      final count = row.read<int>('cnt');
+      final existing = stats[accountId] ?? (photos: 0, videos: 0);
+      if (mediaType == MediaTypeEnum.photo.index) {
+        stats[accountId] = (photos: count, videos: existing.videos);
+      } else {
+        stats[accountId] = (photos: existing.photos, videos: count);
+      }
+    }
+    return stats;
+  }
+
+  Future<void> resetAllFacesProcessed() =>
+      (update(mediaItems)..where((m) => m.facesProcessed.equals(true)))
+          .write(const MediaItemsCompanion(facesProcessed: Value(false)));
 }

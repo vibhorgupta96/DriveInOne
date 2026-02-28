@@ -7,6 +7,7 @@ import '../../core/errors/exceptions.dart';
 import '../../core/utils/logger.dart';
 import '../../domain/entities/sync_status.dart';
 import '../../domain/repositories/sync_repository.dart';
+import '../database/app_database.dart';
 import '../database/daos/accounts_dao.dart';
 import '../database/daos/media_items_dao.dart';
 import '../database/tables/accounts_table.dart';
@@ -56,7 +57,7 @@ class SyncRepositoryImpl implements SyncRepository {
   Stream<SyncStatus> watchSyncStatus() => _syncStatusController.stream;
 
   @override
-  Future<void> syncAccount(String accountId) async {
+  Future<SyncResult> syncAccount(String accountId) async {
     _syncStatusController.add(SyncStatus.syncing(accountId: accountId));
 
     try {
@@ -75,27 +76,34 @@ class SyncRepositoryImpl implements SyncRepository {
       final accessToken = await secureStorage.getAccessToken(accountId);
       final refreshToken = await secureStorage.getRefreshToken(accountId);
       final expiry = await secureStorage.getTokenExpiry(accountId);
+      AppLogger.info('Sync: restoring tokens for $accountId (token ${accessToken != null ? "found" : "missing"}, expiry: $expiry)');
+
       if (accessToken != null) {
         provider.setTokens(
           accessToken: accessToken,
           refreshToken: refreshToken,
           expiry: expiry,
         );
+      } else {
+        throw const SyncException(message: 'No access token found for account');
       }
 
       await provider.refreshTokenIfNeeded();
 
-      // Save refreshed tokens back
+      // Save refreshed tokens + expiry back (use provider's current values,
+      // not the stale locals, in case refreshTokenIfNeeded updated them)
       if (provider.accessToken != null) {
         await secureStorage.saveTokens(
           accountId: accountId,
           accessToken: provider.accessToken!,
-          refreshToken: refreshToken,
+          refreshToken: provider.refreshToken,
+          expiry: provider.tokenExpiry,
         );
       }
 
       // Perform delta sync
       final result = await provider.scanDelta(account.syncToken);
+      AppLogger.info('Sync: scanDelta returned ${result.changedItems.length} items, ${result.deletedRemoteIds.length} deleted');
 
       int synced = 0;
       final total = result.changedItems.length + result.deletedRemoteIds.length;
@@ -146,6 +154,11 @@ class SyncRepositoryImpl implements SyncRepository {
 
       _syncStatusController.add(SyncStatus.idle(lastSync: DateTime.now()));
       AppLogger.info('Sync complete for $accountId: ${result.changedItems.length} changed, ${result.deletedRemoteIds.length} deleted');
+
+      return SyncResult(
+        itemsSynced: result.changedItems.length,
+        itemsDeleted: result.deletedRemoteIds.length,
+      );
     } catch (e) {
       AppLogger.error('Sync failed for $accountId', error: e);
       _syncStatusController.add(SyncStatus.error(e.toString()));
@@ -154,15 +167,69 @@ class SyncRepositoryImpl implements SyncRepository {
   }
 
   @override
-  Future<void> syncAllAccounts() async {
+  Future<SyncResult> syncAllAccounts() async {
     final accounts = await accountsDao.getAllAccounts();
+    int totalSynced = 0;
+    int totalDeleted = 0;
 
     for (final account in accounts) {
       try {
-        await syncAccount(account.id);
+        final result = await syncAccount(account.id);
+        totalSynced += result.itemsSynced;
+        totalDeleted += result.itemsDeleted;
       } catch (e) {
         AppLogger.error('Sync failed for ${account.id}', error: e);
-        // Continue with next account
+        rethrow;
+      }
+    }
+
+    return SyncResult(itemsSynced: totalSynced, itemsDeleted: totalDeleted);
+  }
+
+  @override
+  Future<void> refreshAllTokens({bool silentOnly = false}) async {
+    final accounts = await accountsDao.getAllAccounts();
+    for (final account in accounts) {
+      try {
+        final providerType = _enumToProviderType(account.providerType);
+
+        final provider = providers[providerType];
+        if (provider == null) continue;
+
+        final accessToken = await secureStorage.getAccessToken(account.id);
+        final refreshToken = await secureStorage.getRefreshToken(account.id);
+        final expiry = await secureStorage.getTokenExpiry(account.id);
+
+        if (accessToken == null) {
+          AppLogger.error('Token refresh: no token for ${account.id}');
+          continue;
+        }
+
+        // In silent-only mode, skip Google accounts that lack a refresh token
+        // because the Google Sign-In SDK fallback may show an account picker.
+        if (silentOnly && providerType == ProviderType.google && refreshToken == null) {
+          AppLogger.info('Token refresh: skipping Google account ${account.id} (no refresh token, silent-only)');
+          continue;
+        }
+
+        provider.setTokens(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+          expiry: expiry,
+        );
+        await provider.refreshTokenIfNeeded();
+
+        if (provider.accessToken != null) {
+          await secureStorage.saveTokens(
+            accountId: account.id,
+            accessToken: provider.accessToken!,
+            refreshToken: provider.refreshToken ?? refreshToken,
+            expiry: provider.tokenExpiry,
+          );
+          AppLogger.info('Token refresh: refreshed token for ${account.id}');
+        }
+      } catch (e) {
+        AppLogger.error('Token refresh failed for ${account.id}', error: e);
       }
     }
   }

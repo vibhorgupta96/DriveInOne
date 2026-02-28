@@ -1,9 +1,11 @@
 class ProviderConstants {
-  // Google
-  static const String googleWebClientId = 'YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com';
-  static const String googleIosClientId = 'YOUR_GOOGLE_IOS_CLIENT_ID.apps.googleusercontent.com';
+  // Google — set via --dart-define or replace with your credentials
+  static const String googleWebClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID', defaultValue: 'YOUR_GOOGLE_WEB_CLIENT_ID.apps.googleusercontent.com');
+  static const String googleClientSecret = String.fromEnvironment('GOOGLE_CLIENT_SECRET', defaultValue: '');
+  static const String googleIosClientId = String.fromEnvironment('GOOGLE_IOS_CLIENT_ID', defaultValue: 'YOUR_GOOGLE_IOS_CLIENT_ID.apps.googleusercontent.com');
   static const String googleDriveScope = 'https://www.googleapis.com/auth/drive.readonly';
   static const String googleDriveBaseUrl = 'https://www.googleapis.com/drive/v3';
+  static const String googleTokenEndpoint = 'https://oauth2.googleapis.com/token';
 
   // Microsoft / OneDrive
   static const String microsoftClientId = 'YOUR_MICROSOFT_CLIENT_ID';

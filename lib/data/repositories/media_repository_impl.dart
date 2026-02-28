@@ -74,6 +74,10 @@ class MediaRepositoryImpl implements MediaRepository {
   Future<int> getMediaCount() => mediaItemsDao.getMediaCount();
 
   @override
+  Future<Map<String, ({int photos, int videos})>> getMediaStatsByAccount() =>
+      mediaItemsDao.getMediaStatsByAccount();
+
+  @override
   Future<List<MediaItemEntity>> getMediaItemsByIds(List<String> ids) async {
     final items = await mediaItemsDao.getMediaItemsByIds(ids);
     return items.map(_mapToEntity).toList();

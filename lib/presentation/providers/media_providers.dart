@@ -21,23 +21,28 @@ final mediaCountProvider = FutureProvider<int>((ref) {
   return ref.watch(mediaRepositoryProvider).getMediaCount();
 });
 
+final mediaStatsProvider = FutureProvider<Map<String, ({int photos, int videos})>>((ref) {
+  return ref.watch(mediaRepositoryProvider).getMediaStatsByAccount();
+});
+
 final searchResultsProvider = FutureProvider.family<List<MediaItemEntity>, String>((ref, query) {
   if (query.isEmpty) return Future.value([]);
   return ref.watch(mediaRepositoryProvider).searchByFileName(query);
 });
 
-final timelineNotifierProvider = StateNotifierProvider<TimelineNotifier, AsyncValue<List<MediaItemEntity>>>((ref) {
-  return TimelineNotifier(ref);
+final timelineNotifierProvider = NotifierProvider<TimelineNotifier, AsyncValue<List<MediaItemEntity>>>(() {
+  return TimelineNotifier();
 });
 
-class TimelineNotifier extends StateNotifier<AsyncValue<List<MediaItemEntity>>> {
-  final Ref _ref;
+class TimelineNotifier extends Notifier<AsyncValue<List<MediaItemEntity>>> {
   int _offset = 0;
   static const _pageSize = 50;
   bool _hasMore = true;
 
-  TimelineNotifier(this._ref) : super(const AsyncLoading()) {
+  @override
+  AsyncValue<List<MediaItemEntity>> build() {
     _loadInitial();
+    return const AsyncLoading();
   }
 
   bool get hasMore => _hasMore;
@@ -45,7 +50,7 @@ class TimelineNotifier extends StateNotifier<AsyncValue<List<MediaItemEntity>>> 
   Future<void> _loadInitial() async {
     try {
       _offset = 0;
-      final items = await _ref.read(mediaRepositoryProvider)
+      final items = await ref.read(mediaRepositoryProvider)
           .getTimeline(limit: _pageSize, offset: 0);
       _hasMore = items.length == _pageSize;
       state = AsyncData(items);
@@ -59,7 +64,7 @@ class TimelineNotifier extends StateNotifier<AsyncValue<List<MediaItemEntity>>> 
     final currentItems = state.value ?? [];
     _offset += _pageSize;
     try {
-      final newItems = await _ref.read(mediaRepositoryProvider)
+      final newItems = await ref.read(mediaRepositoryProvider)
           .getTimeline(limit: _pageSize, offset: _offset);
       _hasMore = newItems.length == _pageSize;
       state = AsyncData([...currentItems, ...newItems]);

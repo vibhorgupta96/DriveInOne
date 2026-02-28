@@ -8,5 +8,6 @@ abstract class MediaRepository {
   Future<List<MediaItemEntity>> searchByFileName(String query);
   Future<MediaItemEntity?> getMediaItemById(String id);
   Future<int> getMediaCount();
+  Future<Map<String, ({int photos, int videos})>> getMediaStatsByAccount();
   Future<List<MediaItemEntity>> getMediaItemsByIds(List<String> ids);
 }

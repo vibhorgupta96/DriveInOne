@@ -1,21 +1,43 @@
-# DriveInOne
+<p align="center">
+  <img src="assets/images/DriveInOne_Icon.jpg" width="120" alt="DriveInOne Icon" />
+</p>
 
-Unified cloud photo & video gallery with AI-powered face recognition. Connect your Google Drive, OneDrive, and Dropbox accounts and browse all your media in one place, organized by timeline or by the people in your photos.
+<h1 align="center">DriveInOne</h1>
+
+<p align="center">
+  <strong>All your cloud photos. One app. AI-powered.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/vibhorgupta96/DriveInOne/releases/latest">
+    <img src="https://img.shields.io/github/v/release/vibhorgupta96/DriveInOne?label=Download%20APK&style=for-the-badge" alt="Download APK" />
+  </a>
+  <img src="https://img.shields.io/badge/Flutter-%3E%3D3.16-02569B?style=for-the-badge&logo=flutter" alt="Flutter" />
+  <img src="https://img.shields.io/github/license/vibhorgupta96/DriveInOne?style=for-the-badge" alt="License" />
+</p>
+
+---
+
+DriveInOne is a unified cloud photo & video gallery with AI-powered face recognition. Connect your Google Drive, OneDrive, and Dropbox accounts and browse all your media in one place — organized by timeline or by the people in your photos.
+
+## Download
+
+Grab the latest release APK from the [Releases](https://github.com/vibhorgupta96/DriveInOne/releases/latest) page.
 
 ## Features
 
-- **Multi-Cloud Integration** -- Link Google Drive, OneDrive, and Dropbox accounts and access all media from a single app
-- **Unified Timeline** -- Browse photos and videos chronologically across all connected providers
-- **AI Face Recognition** -- Automatic face detection, embedding generation, and clustering to group photos by person
-- **People View** -- See all recognized individuals and browse their photos
-- **Smart Search** -- Search across media metadata from all connected accounts
-- **Media Viewer** -- Full-screen photo viewer with zoom and video player
-- **Offline-First** -- Local SQLite database keeps your library accessible without a connection
-- **Secure Auth** -- OAuth2 authentication with encrypted token storage
+- **Multi-Cloud Integration** — Link Google Drive, OneDrive, and Dropbox accounts and access all media from a single app
+- **Unified Timeline** — Browse photos and videos chronologically across all connected providers
+- **AI Face Recognition** — On-device face detection and embedding with MobileFaceNet, automatic clustering to group photos by person
+- **People View** — See all recognized individuals and browse their photos
+- **Smart Search** — Search across media metadata from all connected accounts
+- **Media Viewer** — Full-screen photo viewer with pinch-to-zoom and inline video playback
+- **Offline-First** — Local SQLite database keeps your library accessible without a connection
+- **Secure Auth** — OAuth2 authentication with encrypted token storage
 
 ## Architecture
 
-The project follows **Clean Architecture** with three layers:
+The project follows **Clean Architecture** with clearly separated layers:
 
 ```
 lib/
@@ -35,8 +57,8 @@ lib/
 │   ├── providers/         # Riverpod state management
 │   ├── screens/           # Splash, home, timeline, people, search, settings, media viewer
 │   └── widgets/           # Reusable UI components
-├── app.dart               # App configuration
-└── main.dart              # Entry point
+├── app.dart               # App configuration & routing
+└── main.dart              # Entry point & dependency injection
 ```
 
 ## Tech Stack
@@ -48,7 +70,7 @@ lib/
 | Database | Drift (SQLite) |
 | Networking | Dio, Cached Network Image |
 | Auth | Google Sign-In, Flutter AppAuth, Flutter Secure Storage |
-| AI/ML | Google ML Kit Face Detection, TFLite Flutter |
+| AI / ML | Google ML Kit Face Detection, TFLite Flutter (MobileFaceNet) |
 | Media | Video Player, Chewie, Photo View |
 | Code Gen | Freezed, JSON Serializable, Build Runner |
 
@@ -62,7 +84,6 @@ lib/
 ### Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/vibhorgupta96/DriveInOne.git
 cd DriveInOne
 
@@ -78,11 +99,31 @@ flutter run
 
 ### Cloud Provider Setup
 
-Each cloud provider requires OAuth2 credentials:
+Each cloud provider requires its own OAuth2 credentials:
 
-1. **Google Drive** -- Create credentials in the [Google Cloud Console](https://console.cloud.google.com/)
-2. **OneDrive** -- Register an app in the [Azure Portal](https://portal.azure.com/)
-3. **Dropbox** -- Create an app in the [Dropbox App Console](https://www.dropbox.com/developers/apps)
+| Provider | Console |
+|---|---|
+| Google Drive | [Google Cloud Console](https://console.cloud.google.com/) |
+| OneDrive | [Azure Portal](https://portal.azure.com/) |
+| Dropbox | [Dropbox App Console](https://www.dropbox.com/developers/apps) |
+
+Copy `.env.example` to `.env` and fill in your credentials. Pass them at build time:
+
+```bash
+flutter run \
+  --dart-define=GOOGLE_WEB_CLIENT_ID=your-id.apps.googleusercontent.com \
+  --dart-define=GOOGLE_CLIENT_SECRET=your-secret
+```
+
+### Building a Release APK
+
+```bash
+flutter build apk --release \
+  --dart-define=GOOGLE_WEB_CLIENT_ID=your-id.apps.googleusercontent.com \
+  --dart-define=GOOGLE_CLIENT_SECRET=your-secret
+```
+
+The APK will be at `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## License
 

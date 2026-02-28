@@ -2,6 +2,7 @@ import '../../core/enums/provider_type.dart';
 import '../../core/errors/exceptions.dart';
 import '../../domain/entities/account.dart';
 import '../../domain/repositories/auth_repository.dart';
+import '../database/app_database.dart';
 import '../database/daos/accounts_dao.dart';
 import '../database/tables/accounts_table.dart';
 import '../datasources/cloud/cloud_provider.dart';
@@ -102,13 +103,13 @@ class AuthRepositoryImpl implements AuthRepository {
   @override
   Future<List<AccountEntity>> getLinkedAccounts() async {
     final accounts = await accountsDao.getAllAccounts();
-    return accounts.map(_mapToEntity).toList();
+    return accounts.map<AccountEntity>(_mapToEntity).toList();
   }
 
   @override
   Stream<List<AccountEntity>> watchLinkedAccounts() {
     return accountsDao.watchAllAccounts().map(
-      (accounts) => accounts.map(_mapToEntity).toList(),
+      (accounts) => accounts.map<AccountEntity>(_mapToEntity).toList(),
     );
   }
 
@@ -135,11 +136,12 @@ class AuthRepositoryImpl implements AuthRepository {
     await _restoreProviderTokens(accountId, provider);
     await provider.refreshTokenIfNeeded();
 
-    // Save updated tokens
     if (provider.accessToken != null) {
       await secureStorage.saveTokens(
         accountId: accountId,
         accessToken: provider.accessToken!,
+        refreshToken: provider.refreshToken,
+        expiry: provider.tokenExpiry,
       );
     }
   }

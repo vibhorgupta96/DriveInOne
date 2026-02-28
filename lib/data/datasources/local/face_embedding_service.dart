@@ -1,5 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show FlutterError;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
 import '../../../core/constants/app_constants.dart';
@@ -8,41 +10,72 @@ import '../../../core/utils/logger.dart';
 class FaceEmbeddingService {
   Interpreter? _interpreter;
   bool _isInitialized = false;
+  int _inputSize = AppConstants.faceInputSize;
+  int _embeddingDim = AppConstants.faceEmbeddingDimension;
 
   bool get isInitialized => _isInitialized;
+  int get inputSize => _inputSize;
+  int get embeddingDimension => _embeddingDim;
 
   Future<void> initialize() async {
     try {
+      // Surface a clear error when the model file is missing from assets.
+      try {
+        await rootBundle.load('assets/models/mobilefacenet.tflite');
+      } on FlutterError catch (_) {
+        throw StateError(
+          'Missing face model asset: assets/models/mobilefacenet.tflite. '
+          'Add the model file under assets/models/ and rebuild the app.',
+        );
+      }
+
       _interpreter = await Interpreter.fromAsset(
         'assets/models/mobilefacenet.tflite',
       );
+
+      final inputShape = _interpreter!.getInputTensor(0).shape;
+      final outputShape = _interpreter!.getOutputTensor(0).shape;
+      _inputSize = inputShape[1];
+      _embeddingDim = outputShape[1];
+
       _isInitialized = true;
-      AppLogger.info('MobileFaceNet model loaded successfully');
+      AppLogger.info('MobileFaceNet loaded: input=${inputShape}, output=${outputShape}');
     } catch (e) {
       AppLogger.error('Failed to load MobileFaceNet model', error: e);
       rethrow;
     }
   }
 
-  /// Takes cropped face image bytes, returns 192-dim L2-normalized embedding.
   Future<List<double>> getEmbedding(Uint8List croppedFaceBytes) async {
     if (!_isInitialized || _interpreter == null) {
       throw StateError('FaceEmbeddingService not initialized');
     }
 
-    final input = _preprocessFace(croppedFaceBytes);
-    final output = List.filled(
-      AppConstants.faceEmbeddingDimension,
-      0.0,
-    ).reshape([1, AppConstants.faceEmbeddingDimension]);
+    final inputTensor = _interpreter!.getInputTensor(0);
+    final outputTensor = _interpreter!.getOutputTensor(0);
+    final expectedInputShape = inputTensor.shape;
+    final expectedOutputShape = outputTensor.shape;
 
-    _interpreter!.run(input, output);
+    final flatInput = _preprocessFace(croppedFaceBytes);
+    final input = flatInput.reshape([1, _inputSize, _inputSize, 3]);
+    final output = List.filled(_embeddingDim, 0.0).reshape([1, _embeddingDim]);
+
+    try {
+      _interpreter!.run(input, output);
+    } catch (e) {
+      AppLogger.error(
+        'Face embedding inference failed '
+        '(inputShape=$expectedInputShape, outputShape=$expectedOutputShape, '
+        'flatInputLen=${flatInput.length}, modelInputSize=$_inputSize, embeddingDim=$_embeddingDim)',
+        error: e,
+      );
+      rethrow;
+    }
 
     final embedding = List<double>.from(output[0] as List);
     return _l2Normalize(embedding);
   }
 
-  /// Convert embedding to bytes for DB storage.
   static Uint8List embeddingToBytes(List<double> embedding) {
     final float32List = Float32List.fromList(
       embedding.map((e) => e.toDouble()).toList(),
@@ -50,7 +83,6 @@ class FaceEmbeddingService {
     return float32List.buffer.asUint8List();
   }
 
-  /// Convert bytes from DB back to embedding.
   static List<double> bytesToEmbedding(Uint8List bytes) {
     final float32List = bytes.buffer.asFloat32List();
     return float32List.toList();
@@ -62,7 +94,7 @@ class FaceEmbeddingService {
       throw ArgumentError('Failed to decode face image');
     }
 
-    const size = AppConstants.faceInputSize;
+    final size = _inputSize;
     final resized = img.copyResize(image, width: size, height: size);
     final float32 = Float32List(1 * size * size * 3);
 

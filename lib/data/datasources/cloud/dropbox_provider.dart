@@ -108,9 +108,9 @@ class DropboxProvider extends CloudProvider {
   }
 
   @override
-  Future<void> refreshTokenIfNeeded() async {
-    if (!isTokenExpired && accessToken != null) return;
-    if (_refreshToken == null) {
+  Future<void> refreshTokenIfNeeded({bool force = false}) async {
+    if (!force && !isTokenExpired && accessToken != null) return;
+    if (refreshToken == null) {
       throw const AuthException(
           message: 'No refresh token available for Dropbox');
     }
@@ -124,7 +124,7 @@ class DropboxProvider extends CloudProvider {
             authorizationEndpoint: ProviderConstants.dropboxAuthEndpoint,
             tokenEndpoint: ProviderConstants.dropboxTokenEndpoint,
           ),
-          refreshToken: _refreshToken,
+          refreshToken: refreshToken,
           scopes: ProviderConstants.dropboxScopes,
         ),
       );
@@ -135,7 +135,7 @@ class DropboxProvider extends CloudProvider {
 
       setTokens(
         accessToken: result.accessToken!,
-        refreshToken: result.refreshToken ?? _refreshToken,
+        refreshToken: result.refreshToken ?? refreshToken,
         expiry: result.accessTokenExpirationDateTime,
       );
     } catch (e) {
@@ -321,7 +321,7 @@ class DropboxProvider extends CloudProvider {
       fileName: name,
       mimeType: mimeType,
       mediaType: mediaType,
-      thumbnailUrl: null, // Fetched via special Dropbox thumbnail API
+      thumbnailUrl: pathLower.isNotEmpty ? 'dropbox://thumbnail$pathLower' : null,
       fullSizeUrl: null, // Requires temporary link
       width: dimensions?['width'] as int?,
       height: dimensions?['height'] as int?,
