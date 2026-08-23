@@ -1,30 +1,39 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
+import 'package:drift/native.dart';
+import 'package:drive_in_one/app.dart';
+import 'package:drive_in_one/data/database/app_database.dart';
+import 'package:drive_in_one/presentation/providers/database_providers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:drive_in_one/main.dart';
-
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('new users are routed from splash to account setup',
+      (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    try {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appDatabaseProvider.overrideWithValue(database)],
+          child: const DriveInOneApp(),
+        ),
+      );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+      expect(find.text('DriveInOne'), findsOneWidget);
+      expect(find.text('All your cloud photos, one gallery'), findsOneWidget);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pumpAndSettle();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
+      expect(find.text('Link Google Drive'), findsOneWidget);
+      expect(find.text('Link OneDrive'), findsOneWidget);
+      expect(find.text('Link Dropbox'), findsOneWidget);
+    } finally {
+      // Unmount Riverpod and drain Drift's zero-delay stream cleanup timer.
+      // The in-memory executor is then reclaimed with this isolated test
+      // process; closing it while the fake clock is paused can deadlock.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 1));
+    }
   });
 }

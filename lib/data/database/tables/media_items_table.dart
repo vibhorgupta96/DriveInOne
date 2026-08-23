@@ -18,15 +18,16 @@ class MediaItems extends Table {
   DateTimeColumn get timestamp => dateTime()();
   DateTimeColumn get syncedAt => dateTime().withDefault(currentDateAndTime)();
   BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
-  BoolColumn get facesProcessed => boolean().withDefault(const Constant(false))();
+  BoolColumn get facesProcessed =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
 
   @override
   List<Set<Column>> get uniqueKeys => [
-    {accountId, remoteId},
-  ];
+        {accountId, remoteId},
+      ];
 }
 
 enum MediaTypeEnum {

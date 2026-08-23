@@ -59,7 +59,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ? const EmptyState(
               icon: Icons.search,
               title: 'Search your gallery',
-              subtitle: 'Search by file name across all your cloud accounts.',
+              subtitle:
+                  'Search names, paths, file types, providers, and accounts.',
             )
           : _buildResults(),
     );
@@ -84,10 +85,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 child: Text(
-                  '${items.length} results',
+                  items.length == 100
+                      ? 'Showing the first 100 results'
+                      : '${items.length} results',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
                 ),
               ),
               MediaGrid(items: items),

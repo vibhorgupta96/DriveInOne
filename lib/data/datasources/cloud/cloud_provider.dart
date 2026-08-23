@@ -1,19 +1,10 @@
+import '../../../core/constants/app_constants.dart';
 import '../../../core/enums/provider_type.dart';
 import '../../models/account_model.dart';
 import '../../models/sync_result_model.dart';
 
-abstract class CloudProvider {
-  String get providerId;
-  ProviderType get providerType;
-
-  Future<AccountModel> login();
-  Future<void> logout();
-  Future<SyncResultModel> scanDelta(String? syncToken);
-  Future<Map<String, String>> getAuthHeaders();
-  Future<String> getVideoStreamUrl(String fileId);
-  Future<String> getThumbnailUrl(String fileId);
-  Future<void> refreshTokenIfNeeded({bool force = false});
-
+/// Token state management shared by all cloud providers.
+mixin TokenManagement {
   String? _accessToken;
   String? _refreshToken;
   DateTime? _tokenExpiry;
@@ -25,7 +16,7 @@ abstract class CloudProvider {
   bool get isTokenExpired {
     if (_tokenExpiry == null) return true;
     return DateTime.now().isAfter(
-      _tokenExpiry!.subtract(const Duration(minutes: 5)),
+      _tokenExpiry!.subtract(AppConstants.tokenRefreshBuffer),
     );
   }
 
@@ -35,8 +26,10 @@ abstract class CloudProvider {
     DateTime? expiry,
   }) {
     _accessToken = accessToken;
-    if (refreshToken != null) _refreshToken = refreshToken;
-    if (expiry != null) _tokenExpiry = expiry;
+    // Null is meaningful when restoring an account. Always replace every
+    // field so credentials from a previous session cannot leak into this one.
+    _refreshToken = refreshToken;
+    _tokenExpiry = expiry;
   }
 
   void clearTokens() {
@@ -44,4 +37,22 @@ abstract class CloudProvider {
     _refreshToken = null;
     _tokenExpiry = null;
   }
+}
+
+/// Creates a fresh provider session for one account operation.
+///
+/// [accountId] is null only while starting an explicit link flow.
+typedef CloudProviderFactory = CloudProvider Function({String? accountId});
+
+abstract class CloudProvider with TokenManagement {
+  String get providerId;
+  ProviderType get providerType;
+
+  Future<AccountModel> login();
+  Future<void> logout();
+  Future<SyncResultModel> scanDelta(String? syncToken);
+  Future<Map<String, String>> getAuthHeaders();
+  Future<String> getVideoStreamUrl(String fileId);
+  Future<String> getThumbnailUrl(String fileId);
+  Future<void> refreshTokenIfNeeded({bool force = false});
 }

@@ -11,7 +11,6 @@ import '../screens/media_viewer/media_viewer_screen.dart';
 import '../screens/splash/splash_screen.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
-final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
 final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(

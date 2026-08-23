@@ -9,20 +9,24 @@ import '../../data/repositories/auth_repository_impl.dart';
 import '../../domain/entities/account.dart';
 import '../../domain/repositories/auth_repository.dart';
 import 'database_providers.dart';
+import 'media_providers.dart';
 import 'sync_providers.dart';
 
-final cloudProvidersProvider = Provider<Map<ProviderType, CloudProvider>>((ref) {
+final cloudProviderFactoriesProvider =
+    Provider<Map<ProviderType, CloudProviderFactory>>((ref) {
   return {
-    ProviderType.google: GoogleDriveProvider(),
-    ProviderType.onedrive: OneDriveProvider(),
-    ProviderType.dropbox: DropboxProvider(),
+    ProviderType.google: ({String? accountId}) =>
+        GoogleDriveProvider(accountId: accountId),
+    ProviderType.onedrive: ({String? accountId}) => OneDriveProvider(),
+    ProviderType.dropbox: ({String? accountId}) => DropboxProvider(),
   };
 });
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
   return AuthRepositoryImpl(
-    providers: ref.watch(cloudProvidersProvider),
+    providerFactories: ref.watch(cloudProviderFactoriesProvider),
+    db: db,
     accountsDao: db.accountsDao,
     secureStorage: ref.watch(secureStorageProvider),
   );
@@ -32,7 +36,8 @@ final linkedAccountsProvider = StreamProvider<List<AccountEntity>>((ref) {
   return ref.watch(authRepositoryProvider).watchLinkedAccounts();
 });
 
-final linkAccountProvider = NotifierProvider<LinkAccountNotifier, AsyncValue<void>>(() {
+final linkAccountProvider =
+    NotifierProvider<LinkAccountNotifier, AsyncValue<void>>(() {
   return LinkAccountNotifier();
 });
 
@@ -59,6 +64,10 @@ class LinkAccountNotifier extends Notifier<AsyncValue<void>> {
     state = const AsyncLoading();
     try {
       await ref.read(authRepositoryProvider).unlinkAccount(accountId);
+      await ref.read(timelineNotifierProvider.notifier).refresh();
+      ref.invalidate(mediaCountProvider);
+      ref.invalidate(mediaStatsProvider);
+      ref.invalidate(searchResultsProvider);
       state = const AsyncData(null);
     } catch (e, st) {
       state = AsyncError(e, st);

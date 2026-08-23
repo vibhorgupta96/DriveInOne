@@ -2,7 +2,6 @@ import 'package:chewie/chewie.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
-import '../../../../core/enums/provider_type.dart';
 import '../../../../domain/entities/media_item.dart';
 import '../../../providers/auth_providers.dart';
 import '../../../widgets/common/loading_indicator.dart';
@@ -30,45 +29,12 @@ class _SecureVideoPlayerState extends ConsumerState<SecureVideoPlayer> {
 
   Future<void> _initializePlayer() async {
     try {
-      final providers = ref.read(cloudProvidersProvider);
-
-      // Determine provider type from account ID
-      ProviderType? providerType;
-      for (final type in ProviderType.values) {
-        if (widget.mediaItem.accountId.startsWith(type.name)) {
-          providerType = type;
-          break;
-        }
-      }
-
-      if (providerType == null) {
-        setState(() {
-          _error = 'Unknown provider';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final provider = providers[providerType]!;
-
-      // Restore tokens
       final authRepo = ref.read(authRepositoryProvider);
-      final headers = await authRepo.getAuthHeaders(widget.mediaItem.accountId);
-
-      // Get streaming URL
-      final streamUrl = await provider.getVideoStreamUrl(widget.mediaItem.remoteId);
-
-      if (streamUrl.isEmpty) {
-        setState(() {
-          _error = 'Could not get video URL';
-          _isLoading = false;
-        });
-        return;
-      }
+      final media = await authRepo.resolveMedia(widget.mediaItem);
 
       _videoController = VideoPlayerController.networkUrl(
-        Uri.parse(streamUrl),
-        httpHeaders: headers,
+        media.uri,
+        httpHeaders: media.headers,
       );
 
       await _videoController!.initialize();

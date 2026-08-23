@@ -10,12 +10,41 @@ import '../../widgets/common/loading_indicator.dart';
 import 'widgets/media_grid.dart';
 import 'widgets/timeline_group.dart';
 
-class TimelineScreen extends ConsumerWidget {
+class TimelineScreen extends ConsumerStatefulWidget {
   const TimelineScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final timeline = ref.watch(timelineProvider);
+  ConsumerState<TimelineScreen> createState() => _TimelineScreenState();
+}
+
+class _TimelineScreenState extends ConsumerState<TimelineScreen> {
+  final _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 400) {
+      final notifier = ref.read(timelineNotifierProvider.notifier);
+      if (notifier.hasMore) {
+        notifier.loadMore();
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final timeline = ref.watch(timelineNotifierProvider);
     final syncState = ref.watch(syncNotifierProvider);
 
     return Scaffold(
@@ -34,7 +63,8 @@ class TimelineScreen extends ConsumerWidget {
           else
             IconButton(
               icon: const Icon(Icons.sync),
-              onPressed: () => ref.read(syncNotifierProvider.notifier).syncAll(),
+              onPressed: () =>
+                  ref.read(syncNotifierProvider.notifier).syncAll(),
               tooltip: 'Sync all accounts',
             ),
         ],
@@ -47,15 +77,18 @@ class TimelineScreen extends ConsumerWidget {
               return const EmptyState(
                 icon: Icons.photo_library_outlined,
                 title: 'No photos yet',
-                subtitle: 'Link a cloud account in Settings and sync to see your photos here.',
+                subtitle:
+                    'Link a cloud account in Settings and sync to see your photos here.',
               );
             }
             return _buildTimeline(items);
           },
-          loading: () => const LoadingIndicator(message: 'Loading your photos...'),
+          loading: () =>
+              const LoadingIndicator(message: 'Loading your photos...'),
           error: (error, _) => ErrorDisplayWidget(
             error: error,
-            onRetry: () => ref.invalidate(timelineProvider),
+            onRetry: () =>
+                ref.read(timelineNotifierProvider.notifier).refresh(),
           ),
         ),
       ),
@@ -63,7 +96,6 @@ class TimelineScreen extends ConsumerWidget {
   }
 
   Widget _buildTimeline(List<MediaItemEntity> items) {
-    // Group items by date
     final groups = <String, List<MediaItemEntity>>{};
     for (final item in items) {
       final label = item.timestamp.timelineGroupLabel;
@@ -71,6 +103,7 @@ class TimelineScreen extends ConsumerWidget {
     }
 
     return ListView.builder(
+      controller: _scrollController,
       padding: const EdgeInsets.only(bottom: 16),
       itemCount: groups.length,
       itemBuilder: (context, index) {

@@ -1,9 +1,8 @@
-import '../../core/enums/media_type.dart';
+import '../../core/extensions/enum_converters.dart';
 import '../../domain/entities/media_item.dart';
 import '../../domain/repositories/media_repository.dart';
 import '../database/daos/media_items_dao.dart';
 import '../database/app_database.dart';
-import '../database/tables/media_items_table.dart';
 
 class MediaRepositoryImpl implements MediaRepository {
   final MediaItemsDao mediaItemsDao;
@@ -18,7 +17,7 @@ class MediaRepositoryImpl implements MediaRepository {
       remotePath: item.remotePath,
       fileName: item.fileName,
       mimeType: item.mimeType,
-      mediaType: item.mediaType == MediaTypeEnum.photo ? MediaType.photo : MediaType.video,
+      mediaType: item.mediaType.toDomain(),
       thumbnailUrl: item.thumbnailUrl,
       fullSizeUrl: item.fullSizeUrl,
       width: item.width,
@@ -33,20 +32,36 @@ class MediaRepositoryImpl implements MediaRepository {
   }
 
   @override
-  Future<List<MediaItemEntity>> getTimeline({required int limit, required int offset}) async {
+  Future<List<MediaItemEntity>> getTimeline(
+      {required int limit, required int offset}) async {
     final items = await mediaItemsDao.getTimelinePage(limit, offset);
+    return items.map(_mapToEntity).toList();
+  }
+
+  @override
+  Future<List<MediaItemEntity>> getTimelineAfter({
+    required int limit,
+    DateTime? beforeTimestamp,
+    String? beforeId,
+  }) async {
+    final items = await mediaItemsDao.getTimelinePageAfter(
+      limit: limit,
+      beforeTimestamp: beforeTimestamp,
+      beforeId: beforeId,
+    );
     return items.map(_mapToEntity).toList();
   }
 
   @override
   Stream<List<MediaItemEntity>> watchTimeline() {
     return mediaItemsDao.watchTimeline().map(
-      (items) => items.map(_mapToEntity).toList(),
-    );
+          (items) => items.map(_mapToEntity).toList(),
+        );
   }
 
   @override
-  Future<List<MediaItemEntity>> getMediaByDateRange(DateTime start, DateTime end) async {
+  Future<List<MediaItemEntity>> getMediaByDateRange(
+      DateTime start, DateTime end) async {
     final items = await mediaItemsDao.getMediaByDateRange(start, end);
     return items.map(_mapToEntity).toList();
   }
@@ -58,8 +73,16 @@ class MediaRepositoryImpl implements MediaRepository {
   }
 
   @override
-  Future<List<MediaItemEntity>> searchByFileName(String query) async {
-    final items = await mediaItemsDao.searchByFileName(query);
+  Future<List<MediaItemEntity>> searchMedia(
+    String query, {
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final items = await mediaItemsDao.searchMedia(
+      query,
+      limit: limit,
+      offset: offset,
+    );
     return items.map(_mapToEntity).toList();
   }
 

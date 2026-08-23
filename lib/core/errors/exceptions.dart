@@ -10,18 +10,25 @@ class AppException implements Exception {
 }
 
 class AuthException extends AppException {
-  const AuthException({required super.message, super.code, super.originalError});
+  const AuthException(
+      {required super.message, super.code, super.originalError});
 }
 
 class SyncException extends AppException {
-  const SyncException({required super.message, super.code, super.originalError});
+  const SyncException(
+      {required super.message, super.code, super.originalError});
 }
 
 class ApiException extends AppException {
   final int? statusCode;
-  const ApiException({required super.message, super.code, super.originalError, this.statusCode});
+  const ApiException(
+      {required super.message,
+      super.code,
+      super.originalError,
+      this.statusCode});
 }
 
 class StorageException extends AppException {
-  const StorageException({required super.message, super.code, super.originalError});
+  const StorageException(
+      {required super.message, super.code, super.originalError});
 }

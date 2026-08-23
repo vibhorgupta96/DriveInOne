@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import '../../../core/constants/provider_constants.dart';
-import '../../../core/enums/media_type.dart';
 import '../../../core/enums/provider_type.dart';
 import '../../../core/errors/exceptions.dart';
 import '../../../core/utils/logger.dart';
@@ -11,15 +11,17 @@ import '../../models/sync_result_model.dart';
 import 'cloud_provider.dart';
 
 class GoogleDriveProvider extends CloudProvider {
-  final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
+  static final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
+  static Future<void>? _initialization;
+
+  final String? accountId;
   late final Dio _dio;
-  final Dio _tokenDio = Dio();
+  final Dio _retryDio = Dio();
 
   GoogleSignInAccount? _currentUser;
-  bool _initialized = false;
-  bool _isRefreshing = false;
+  Future<void>? _refreshFuture;
 
-  GoogleDriveProvider() {
+  GoogleDriveProvider({this.accountId}) {
     _dio = Dio(BaseOptions(
       baseUrl: ProviderConstants.googleDriveBaseUrl,
       connectTimeout: const Duration(seconds: 30),
@@ -28,19 +30,26 @@ class GoogleDriveProvider extends CloudProvider {
     _dio.interceptors.add(InterceptorsWrapper(
       onError: (error, handler) async {
         if (error.response?.statusCode == 401 &&
-            !_isRefreshing &&
-            refreshToken != null) {
-          _isRefreshing = true;
+            error.requestOptions.extra['googleAuthRetried'] != true) {
           try {
-            await refreshTokenIfNeeded(force: true);
+            if (_refreshFuture != null) {
+              await _refreshFuture;
+            } else {
+              final refresh = refreshTokenIfNeeded(force: true);
+              _refreshFuture = refresh;
+              try {
+                await refresh;
+              } finally {
+                _refreshFuture = null;
+              }
+            }
             final headers = await getAuthHeaders();
             final opts = error.requestOptions;
+            opts.extra['googleAuthRetried'] = true;
             opts.headers.addAll(headers);
-            final response = await _tokenDio.fetch(opts);
-            _isRefreshing = false;
+            final response = await _retryDio.fetch(opts);
             return handler.resolve(response);
           } catch (e) {
-            _isRefreshing = false;
             return handler.next(error);
           }
         }
@@ -56,12 +65,24 @@ class GoogleDriveProvider extends CloudProvider {
   ProviderType get providerType => ProviderType.google;
 
   Future<void> _ensureInitialized() async {
-    if (!_initialized) {
-      await _googleSignIn.initialize(
-        serverClientId: ProviderConstants.googleWebClientId,
+    if (_initialization != null) return _initialization!;
+
+    final webClientId = ProviderConstants.requireConfigured(
+      ProviderConstants.googleWebClientId,
+      'GOOGLE_WEB_CLIENT_ID',
+    );
+    String? clientId;
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      clientId = ProviderConstants.requireConfigured(
+        ProviderConstants.googleIosClientId,
+        'GOOGLE_IOS_CLIENT_ID',
       );
-      _initialized = true;
     }
+    return _initialization = _googleSignIn.initialize(
+      clientId: clientId,
+      serverClientId: webClientId,
+    );
   }
 
   @override
@@ -73,47 +94,20 @@ class GoogleDriveProvider extends CloudProvider {
       );
       _currentUser = account;
 
-      final authz = await account.authorizationClient.authorizeScopes(
-        [ProviderConstants.googleDriveScope],
-      );
+      // This method is reached only from the explicit Link Account action, so
+      // an interactive scope grant is allowed here if the combined flow did
+      // not already authorize Drive.
+      final authz = await account.authorizationClient.authorizationForScopes(
+            [ProviderConstants.googleDriveScope],
+          ) ??
+          await account.authorizationClient.authorizeScopes(
+            [ProviderConstants.googleDriveScope],
+          );
       final token = authz.accessToken;
-
-      // Try to get a server auth code so we can exchange it for a refresh token.
-      String? oauthRefreshToken;
-      String finalAccessToken = token;
-      DateTime expiry = DateTime.now().add(const Duration(hours: 1));
-
-      try {
-        final serverAuth = await account.authorizationClient.authorizeServer(
-          [ProviderConstants.googleDriveScope],
-        );
-        if (serverAuth != null) {
-          final exchanged = await _exchangeServerAuthCode(serverAuth.serverAuthCode);
-          if (exchanged != null) {
-            finalAccessToken = exchanged['access_token'] as String? ?? token;
-            oauthRefreshToken = exchanged['refresh_token'] as String?;
-            final expiresIn = exchanged['expires_in'] as int?;
-            if (expiresIn != null) {
-              expiry = DateTime.now().add(Duration(seconds: expiresIn));
-            }
-            AppLogger.info('Google login: obtained refresh token via server auth code');
-          }
-        }
-      } catch (e) {
-        AppLogger.error('Google login: server auth code exchange failed, using SDK token only', error: e);
-      }
-
-      if (oauthRefreshToken == null) {
-        AppLogger.warning('Google login completed WITHOUT a refresh token. '
-            'Token refresh will not be possible after expiry (~1 hour). '
-            'User may need to revoke access at https://myaccount.google.com/permissions and re-link.');
-      } else {
-        AppLogger.info('Google login completed with refresh token.');
-      }
+      final expiry = _estimatedGoogleExpiry();
 
       setTokens(
-        accessToken: finalAccessToken,
-        refreshToken: oauthRefreshToken,
+        accessToken: token,
         expiry: expiry,
       );
 
@@ -123,49 +117,24 @@ class GoogleDriveProvider extends CloudProvider {
         email: account.email,
         displayName: account.displayName,
         avatarUrl: account.photoUrl,
-        accessToken: finalAccessToken,
-        refreshToken: oauthRefreshToken,
+        accessToken: token,
         tokenExpiry: expiry,
       );
+    } on StateError catch (e) {
+      throw AuthException(message: e.message);
     } catch (e) {
       if (e is AuthException) rethrow;
       throw AuthException(message: 'Google sign-in failed', originalError: e);
     }
   }
 
-  /// Exchanges a server auth code at Google's token endpoint for
-  /// access + refresh tokens.  Returns the JSON map on success, null on failure.
-  Future<Map<String, dynamic>?> _exchangeServerAuthCode(String code) async {
-    try {
-      final response = await _tokenDio.post(
-        ProviderConstants.googleTokenEndpoint,
-        options: Options(contentType: Headers.formUrlEncodedContentType),
-        data: {
-          'grant_type': 'authorization_code',
-          'code': code,
-          'client_id': ProviderConstants.googleWebClientId,
-          'client_secret': ProviderConstants.googleClientSecret,
-          'redirect_uri': '',
-        },
-      );
-      final data = response.data as Map<String, dynamic>;
-      AppLogger.info('Google token exchange response keys: ${data.keys.toList()}');
-      if (data['refresh_token'] == null) {
-        AppLogger.warning('Google token exchange: no refresh_token in response. '
-            'User may need to revoke app access at https://myaccount.google.com/permissions '
-            'and re-link to obtain a refresh token.');
-      }
-      return data;
-    } on DioException catch (e) {
-      AppLogger.error('Google token exchange failed (${e.response?.statusCode}): ${e.response?.data}', error: e);
-      return null;
-    }
-  }
-
   @override
   Future<void> logout() async {
     await _ensureInitialized();
-    await _googleSignIn.signOut();
+    // Google Sign-In currently has process-wide sign-in state. Only sign out a
+    // user authenticated by this provider instance; an account-scoped unlink
+    // must not accidentally sign out a different linked account.
+    if (_currentUser != null) await _googleSignIn.signOut();
     _currentUser = null;
     clearTokens();
   }
@@ -179,46 +148,64 @@ class GoogleDriveProvider extends CloudProvider {
   @override
   Future<void> refreshTokenIfNeeded({bool force = false}) async {
     if (!force && !isTokenExpired && accessToken != null) return;
+    await _ensureInitialized();
 
-    if (refreshToken != null) {
+    final oldToken = accessToken;
+    if (force && oldToken != null) {
       try {
-        final response = await _tokenDio.post(
-          ProviderConstants.googleTokenEndpoint,
-          options: Options(contentType: Headers.formUrlEncodedContentType),
-          data: {
-            'grant_type': 'refresh_token',
-            'refresh_token': refreshToken,
-            'client_id': ProviderConstants.googleWebClientId,
-            'client_secret': ProviderConstants.googleClientSecret,
-          },
+        await _googleSignIn.authorizationClient.clearAuthorizationToken(
+          accessToken: oldToken,
         );
-
-        final data = response.data as Map<String, dynamic>;
-        setTokens(
-          accessToken: data['access_token'] as String,
-          refreshToken: refreshToken,
-          expiry: DateTime.now().add(Duration(seconds: data['expires_in'] as int)),
-        );
-        AppLogger.info('Google: silently refreshed token via refresh_token');
-        return;
-      } on DioException catch (e) {
-        AppLogger.error('Google: refresh_token flow failed', error: e);
+      } catch (error) {
+        AppLogger.warning(
+            'Could not clear the cached Google access token: $error');
       }
     }
 
-    // No refresh token or HTTP refresh failed. Use existing access token
-    // as-is if available — the 401 interceptor will catch failures.
-    // Never fall back to the Sign-In SDK here; it can show an account
-    // picker or consent screen, which must only happen during setup.
-    if (accessToken != null) {
-      AppLogger.info('Google: no refresh token, using existing access token');
-      return;
+    final account = _currentUser ?? await _restoreAccountSilently();
+    final authorization = await account.authorizationClient
+        .authorizationForScopes([ProviderConstants.googleDriveScope]);
+    if (authorization == null) {
+      throw const AuthException(
+        message:
+            'Google Drive authorization expired. Please re-link the account.',
+      );
     }
 
-    throw const AuthException(
-      message: 'Session expired. Please re-link your Google account.',
+    _currentUser = account;
+    setTokens(
+      accessToken: authorization.accessToken,
+      expiry: _estimatedGoogleExpiry(),
     );
   }
+
+  Future<GoogleSignInAccount> _restoreAccountSilently() async {
+    final attempt = _googleSignIn.attemptLightweightAuthentication();
+    if (attempt == null) {
+      throw const AuthException(
+        message:
+            'Google session cannot be restored silently. Please re-link the account.',
+      );
+    }
+
+    final account = await attempt;
+    if (account == null) {
+      throw const AuthException(
+        message: 'Google session expired. Please re-link the account.',
+      );
+    }
+    if (accountId != null && accountId != 'google|${account.email}') {
+      throw AuthException(
+        message:
+            'Google is signed in as ${account.email}, not the requested account. '
+            'Please re-link $accountId.',
+      );
+    }
+    return account;
+  }
+
+  static DateTime _estimatedGoogleExpiry() =>
+      DateTime.now().add(const Duration(minutes: 55));
 
   @override
   Future<SyncResultModel> scanDelta(String? syncToken) async {
@@ -226,7 +213,8 @@ class GoogleDriveProvider extends CloudProvider {
     final changedItems = <MediaItemModel>[];
     final deletedIds = <String>[];
 
-    AppLogger.info('Starting Google Drive scan (syncToken: ${syncToken != null ? "exists" : "null"})');
+    AppLogger.info(
+        'Starting Google Drive scan (syncToken: ${syncToken != null ? "exists" : "null"})');
 
     try {
       if (syncToken == null) {
@@ -236,7 +224,8 @@ class GoogleDriveProvider extends CloudProvider {
             '/files',
             options: Options(headers: headers),
             queryParameters: {
-              'q': "(mimeType contains 'image/' or mimeType contains 'video/') and trashed = false",
+              'q':
+                  "(mimeType contains 'image/' or mimeType contains 'video/') and trashed = false",
               'fields':
                   'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata,md5Checksum,createdTime,modifiedTime,size)',
               'pageSize': 100,
@@ -375,8 +364,10 @@ class GoogleDriveProvider extends CloudProvider {
       mediaType: MediaItemModel.mediaTypeFromMime(mimeType),
       thumbnailUrl: 'gdrive://thumb/${file['id'] as String}',
       fullSizeUrl: file['webContentLink'] as String?,
-      width: _parseInt(imageMetadata?['width']) ?? _parseInt(videoMetadata?['width']),
-      height: _parseInt(imageMetadata?['height']) ?? _parseInt(videoMetadata?['height']),
+      width: _parseInt(imageMetadata?['width']) ??
+          _parseInt(videoMetadata?['width']),
+      height: _parseInt(imageMetadata?['height']) ??
+          _parseInt(videoMetadata?['height']),
       fileSize: _parseInt(file['size']),
       durationSeconds: durationMillis != null ? durationMillis ~/ 1000 : null,
       fileHash: file['md5Checksum'] as String?,

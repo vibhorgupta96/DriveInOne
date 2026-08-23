@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/enums/provider_type.dart';
 import '../../../core/errors/exceptions.dart';
 import '../../../core/theme/app_colors.dart';
@@ -20,21 +21,58 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  late final Future<PackageInfo> _packageInfo;
+
   @override
   void initState() {
     super.initState();
+    _packageInfo = PackageInfo.fromPlatform();
   }
 
   void _showSyncResult(SyncResult result) {
     if (!mounted) return;
-    final message = result.itemsSynced == 0 && result.itemsDeleted == 0
-        ? 'No new media found in Google Drive. Note: Google Photos items are separate from Drive.'
-        : 'Synced ${result.itemsSynced} items${result.itemsDeleted > 0 ? ', removed ${result.itemsDeleted}' : ''}';
+    final failed = result.failedAccounts;
+    final successful = result.successfulAccounts;
+    late final String message;
+    Color? backgroundColor;
+
+    if (result.accountOutcomes.isEmpty) {
+      message = 'No linked accounts to sync.';
+    } else if (result.allFailed) {
+      message = 'Sync failed for ${failed.length} '
+          'account${failed.length == 1 ? '' : 's'}: ${_failureSummary(failed)}';
+      backgroundColor = AppColors.error;
+    } else if (result.isPartialSuccess) {
+      message = 'Synced ${result.itemsSynced} items'
+          '${result.itemsDeleted > 0 ? ', removed ${result.itemsDeleted}' : ''}. '
+          '${failed.length} of ${result.accountOutcomes.length} accounts failed: '
+          '${_failureSummary(failed)}';
+      backgroundColor = AppColors.warning;
+    } else if (result.itemsSynced == 0 && result.itemsDeleted == 0) {
+      message = '${successful.length} '
+          'account${successful.length == 1 ? ' is' : 's are'} up to date.';
+    } else {
+      message = 'Synced ${result.itemsSynced} items'
+          '${result.itemsDeleted > 0 ? ', removed ${result.itemsDeleted}' : ''} '
+          'from ${successful.length} account${successful.length == 1 ? '' : 's'}.';
+    }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+      SnackBar(
+        content: Text(message),
+        backgroundColor: backgroundColor,
+        duration: Duration(seconds: result.hasFailures ? 7 : 4),
+      ),
     );
     ref.invalidate(mediaCountProvider);
     ref.invalidate(mediaStatsProvider);
+  }
+
+  String _failureSummary(List<AccountSyncOutcome> failed) {
+    return failed
+        .take(2)
+        .map((outcome) =>
+            '${outcome.accountLabel}: ${outcome.errorMessage ?? 'Unknown error'}')
+        .join('; ');
   }
 
   void _showSyncError(Object error) {
@@ -72,7 +110,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (prev?.isLoading == true && next.hasError) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Link failed: ${next.error}'),
+            content: Text('Account update failed: ${next.error}'),
             backgroundColor: AppColors.error,
           ),
         );
@@ -97,10 +135,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 );
               }
               return Column(
-                children: accts.map((a) => AccountTile(
-                  account: a,
-                  onUnlink: () => _confirmUnlink(a.id, a.email),
-                )).toList(),
+                children: accts
+                    .map((a) => AccountTile(
+                          account: a,
+                          onUnlink: () => _confirmUnlink(a.id, a.email),
+                        ))
+                    .toList(),
               );
             },
             loading: () => const Padding(
@@ -155,7 +195,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   )
                 : const Icon(Icons.sync),
             title: const Text('Sync Now'),
-            subtitle: const Text('Fetch new photos and videos from all accounts'),
+            subtitle:
+                const Text('Fetch new photos and videos from all accounts'),
             onTap: syncState.isLoading
                 ? null
                 : () => ref.read(syncNotifierProvider.notifier).syncAll(),
@@ -188,10 +229,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           // About section
           _sectionHeader('About'),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('DriveInOne'),
-            subtitle: Text('Version 1.0.0'),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('DriveInOne'),
+            subtitle: FutureBuilder<PackageInfo>(
+              future: _packageInfo,
+              builder: (context, snapshot) =>
+                  Text('Version ${snapshot.data?.version ?? '0.0.1'}'),
+            ),
           ),
         ],
       ),
@@ -204,9 +249,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Text(
         title,
         style: Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: Theme.of(context).colorScheme.primary,
-          fontWeight: FontWeight.w600,
-        ),
+              color: Theme.of(context).colorScheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
       ),
     );
   }
@@ -264,7 +309,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           width: 40,
                           height: 4,
                           decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.4),
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant
+                                .withValues(alpha: 0.4),
                             borderRadius: BorderRadius.circular(2),
                           ),
                         ),
@@ -273,8 +321,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       Text(
                         'Media Stats',
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                              fontWeight: FontWeight.bold,
+                            ),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 20),
@@ -305,17 +353,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(height: 24),
                         Text(
                           'By Account',
-                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                          ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleSmall
+                              ?.copyWith(
+                                color: Theme.of(context).colorScheme.primary,
+                                fontWeight: FontWeight.w600,
+                              ),
                         ),
                         const SizedBox(height: 8),
                         ...accountList.map((account) {
                           final accountStats = statsMap[account.id];
                           final photos = accountStats?.photos ?? 0;
                           final videos = accountStats?.videos ?? 0;
-                          return _accountStatsRow(context, account, photos, videos);
+                          return _accountStatsRow(
+                              context, account, photos, videos);
                         }),
                       ],
                       const SizedBox(height: 20),
@@ -348,7 +400,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -358,16 +410,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Text(
             value,
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
           ),
           const SizedBox(height: 2),
           Text(
             label,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
           ),
         ],
       ),
@@ -393,15 +445,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 Text(
                   account.email,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
+                        fontWeight: FontWeight.w500,
+                      ),
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   account.providerType.displayName,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                 ),
               ],
             ),
@@ -409,11 +461,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.photo_outlined, size: 16, color: AppColors.primary),
+              const Icon(
+                Icons.photo_outlined,
+                size: 16,
+                color: AppColors.primary,
+              ),
               const SizedBox(width: 2),
               Text('$photos', style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(width: 10),
-              Icon(Icons.videocam_outlined, size: 16, color: AppColors.accent),
+              const Icon(
+                Icons.videocam_outlined,
+                size: 16,
+                color: AppColors.accent,
+              ),
               const SizedBox(width: 2),
               Text('$videos', style: Theme.of(context).textTheme.bodySmall),
             ],
@@ -428,16 +488,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Unlink Account'),
-        content: Text('Are you sure you want to unlink $email? Media from this account will be removed from the gallery.'),
+        content: Text(
+            'Are you sure you want to unlink $email? Media from this account will be removed from the gallery.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () {
-              ref.read(linkAccountProvider.notifier).unlink(accountId);
+            onPressed: () async {
               Navigator.pop(ctx);
+              await ref.read(linkAccountProvider.notifier).unlink(accountId);
+              if (!mounted) return;
+              final unlinkState = ref.read(linkAccountProvider);
+              if (!unlinkState.hasError) {
+                await ref.read(timelineNotifierProvider.notifier).refresh();
+                ref.invalidate(mediaCountProvider);
+                ref.invalidate(mediaStatsProvider);
+                ref.invalidate(searchResultsProvider);
+              }
             },
             style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             child: const Text('Unlink'),

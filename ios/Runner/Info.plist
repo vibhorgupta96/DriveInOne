@@ -48,8 +48,8 @@
             <string>Editor</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <!-- Google Sign-In URL scheme (replace with your iOS client ID) -->
-                <string>com.googleusercontent.apps.YOUR_IOS_CLIENT_ID</string>
+                <!-- Supplied by ios/Flutter/OAuth.xcconfig (kept out of Git). -->
+                <string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
                 <!-- flutter_appauth OAuth redirect -->
                 <string>com.driveinone.app</string>
             </array>

@@ -1,0 +1,3 @@
+// Copy to OAuth.xcconfig and replace this with the reversed iOS OAuth client
+// ID, for example: com.googleusercontent.apps.123456-abcdef
+GOOGLE_REVERSED_CLIENT_ID =

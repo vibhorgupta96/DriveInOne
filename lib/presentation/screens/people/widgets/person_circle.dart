@@ -20,8 +20,10 @@ class PersonCircle extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final representativeFaceThumb = ref.watch(representativeFaceThumbnailProvider(cluster.id));
-    final representativeMedia = ref.watch(representativeMediaProvider(cluster.id));
+    final representativeFaceThumb =
+        ref.watch(representativeFaceThumbnailProvider(cluster.id));
+    final representativeMedia =
+        ref.watch(representativeMediaProvider(cluster.id));
     final showAddName = cluster.label == null || cluster.label!.trim().isEmpty;
 
     return GestureDetector(
@@ -50,10 +52,13 @@ class PersonCircle extends ConsumerWidget {
                             ),
                           );
                         }
-                        return _fallbackMediaThumb(context, representativeMedia);
+                        return _fallbackMediaThumb(
+                            context, representativeMedia);
                       },
-                      loading: () => _fallbackMediaThumb(context, representativeMedia),
-                      error: (_, __) => _fallbackMediaThumb(context, representativeMedia),
+                      loading: () =>
+                          _fallbackMediaThumb(context, representativeMedia),
+                      error: (_, __) =>
+                          _fallbackMediaThumb(context, representativeMedia),
                     ),
                   ),
                 ),
@@ -125,6 +130,7 @@ class PersonCircle extends ConsumerWidget {
         return AuthenticatedImage(
           imageUrl: media.thumbnailUrl,
           accountId: media.accountId,
+          cacheKey: 'media:${media.id}',
           fit: BoxFit.cover,
         );
       },

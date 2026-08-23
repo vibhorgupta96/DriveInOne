@@ -7,7 +7,6 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/constants/app_constants.dart';
-import '../../core/enums/media_type.dart';
 import '../../core/constants/provider_constants.dart';
 import '../../core/utils/image_utils.dart';
 import '../../core/utils/logger.dart';
@@ -19,7 +18,6 @@ import '../datasources/local/secure_storage_source.dart';
 import '../database/app_database.dart';
 import '../database/daos/faces_dao.dart';
 import '../database/daos/media_items_dao.dart';
-import '../database/tables/media_items_table.dart';
 import '../datasources/local/face_clustering_service.dart';
 import '../datasources/local/face_detection_service.dart';
 import '../datasources/local/face_embedding_service.dart';
@@ -48,79 +46,75 @@ class FaceRepositoryImpl implements FaceRepository {
   });
 
   @override
-  Future<void> processMediaItem(String mediaItemId, Uint8List thumbnailBytes) async {
+  Future<void> processMediaItem(
+    String mediaItemId,
+    Uint8List thumbnailBytes,
+  ) async {
+    File? tempFile;
     try {
       final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/face_detect_$mediaItemId.jpg');
+      tempFile = File('${tempDir.path}/face_detect_${_uuid.v4()}.jpg');
       await tempFile.writeAsBytes(thumbnailBytes);
 
       final detectedFaces =
           await faceDetectionService.detectFacesFromFile(tempFile.path);
 
-      if (detectedFaces.isEmpty) {
-        await mediaItemsDao.markFacesProcessed(mediaItemId);
-        await tempFile.delete().catchError((_) {});
-        return;
-      }
+      // Build the complete replacement before touching persisted faces. Any
+      // crop/model failure keeps the previous result intact and retryable.
+      final replacements = <FacesCompanion>[];
 
       for (final detected in detectedFaces) {
-        try {
-          final rect = detected.boundingBox;
-          final faceSize =
-              rect.width > rect.height ? rect.width : rect.height;
+        final rect = detected.boundingBox;
+        final faceSize = rect.width > rect.height ? rect.width : rect.height;
 
-          if (faceSize < AppConstants.minFaceSizePixels) continue;
+        if (faceSize < AppConstants.minFaceSizePixels) continue;
 
-          final yAngle = detected.headEulerAngleY;
-          if (yAngle != null &&
-              yAngle.abs() > AppConstants.maxHeadEulerAngleY) {
-            continue;
-          }
-          final zAngle = detected.headEulerAngleZ;
-          if (zAngle != null &&
-              zAngle.abs() > AppConstants.maxHeadEulerAngleZ) {
-            continue;
-          }
+        final yAngle = detected.headEulerAngleY;
+        if (yAngle != null && yAngle.abs() > AppConstants.maxHeadEulerAngleY) {
+          continue;
+        }
+        final zAngle = detected.headEulerAngleZ;
+        if (zAngle != null && zAngle.abs() > AppConstants.maxHeadEulerAngleZ) {
+          continue;
+        }
 
-          final croppedBytes = ImageUtils.cropAndAlignFace(
-            thumbnailBytes,
-            left: rect.left.toInt(),
-            top: rect.top.toInt(),
-            width: rect.width.toInt(),
-            height: rect.height.toInt(),
-            padding: AppConstants.facePaddingRatio,
-            eyeAngleDegrees: detected.eyeRotationDegrees,
-          );
+        final croppedBytes = ImageUtils.cropAndAlignFace(
+          thumbnailBytes,
+          left: rect.left.toInt(),
+          top: rect.top.toInt(),
+          width: rect.width.toInt(),
+          height: rect.height.toInt(),
+          padding: AppConstants.facePaddingRatio,
+          eyeAngleDegrees: detected.eyeRotationDegrees,
+        );
 
-          final embedding =
-              await faceEmbeddingService.getEmbedding(croppedBytes);
-          final embeddingBytes =
-              FaceEmbeddingService.embeddingToBytes(embedding);
+        final embedding = await faceEmbeddingService.getEmbedding(croppedBytes);
+        final embeddingBytes = FaceEmbeddingService.embeddingToBytes(embedding);
 
-          final faceId = _uuid.v4();
-          final boundingBox = jsonEncode({
+        replacements.add(FacesCompanion.insert(
+          id: _uuid.v4(),
+          mediaItemId: mediaItemId,
+          boundingBox: jsonEncode({
             'left': rect.left,
             'top': rect.top,
             'width': rect.width,
             'height': rect.height,
-          });
-
-          await facesDao.insertFace(FacesCompanion(
-            id: Value(faceId),
-            mediaItemId: Value(mediaItemId),
-            boundingBox: Value(boundingBox),
-            embedding: Value(embeddingBytes),
-          ));
-        } catch (e) {
-          AppLogger.error('Failed to process face in $mediaItemId', error: e);
-        }
+          }),
+          embedding: embeddingBytes,
+        ));
       }
 
+      await facesDao.replaceFacesForMedia(mediaItemId, replacements);
       await mediaItemsDao.markFacesProcessed(mediaItemId);
-      await tempFile.delete().catchError((_) {});
     } catch (e) {
       AppLogger.error('Face processing failed for $mediaItemId', error: e);
       rethrow;
+    } finally {
+      if (tempFile != null) {
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+      }
     }
   }
 
@@ -128,17 +122,22 @@ class FaceRepositoryImpl implements FaceRepository {
   Future<void> runClustering() async {
     try {
       final allFaces = await facesDao.getAllFaces();
-      if (allFaces.isEmpty) return;
+      if (allFaces.isEmpty) {
+        await facesDao.pruneOrphanClusters();
+        return;
+      }
 
       // Convert DB face objects to FaceModel
-      final faceModels = allFaces.map((f) => FaceModel(
-        id: f.id,
-        mediaItemId: f.mediaItemId,
-        boundingBox: f.boundingBox,
-        embedding: f.embedding,
-        clusterId: f.clusterId,
-        detectedAt: f.detectedAt,
-      )).toList();
+      final faceModels = allFaces
+          .map((f) => FaceModel(
+                id: f.id,
+                mediaItemId: f.mediaItemId,
+                boundingBox: f.boundingBox,
+                embedding: f.embedding,
+                clusterId: f.clusterId,
+                detectedAt: f.detectedAt,
+              ))
+          .toList();
 
       // Load existing cluster centroids
       final existingClusters = await facesDao.getAllClusters();
@@ -153,52 +152,25 @@ class FaceRepositoryImpl implements FaceRepository {
       // Run clustering
       final result = faceClusteringService.clusterFaces(
         faceModels,
-        existingCentroids: existingCentroids.isNotEmpty ? existingCentroids : null,
+        existingCentroids:
+            existingCentroids.isNotEmpty ? existingCentroids : null,
       );
 
-      // Apply face -> cluster assignments.
-      for (final assignment in result.assignments) {
-        await facesDao.updateFaceCluster(assignment.faceId, assignment.clusterId);
-      }
-
-      // Persist cluster stats once per final cluster state.
-      final existingClusterIds = existingClusters.map((c) => c.id).toSet();
-      final finalClusterIds = result.clusterCentroids.keys.toSet();
-
-      for (final clusterId in finalClusterIds) {
-        final centroid = result.clusterCentroids[clusterId];
-        if (centroid == null) continue;
-        final count = result.clusterCounts[clusterId] ?? 0;
-        final representativeFaceId = result.clusterRepresentatives[clusterId];
-
-        if (existingClusterIds.contains(clusterId)) {
-          await facesDao.updateClusterStats(
-            clusterId,
-            centroid: centroid,
-            count: count,
-            representativeFaceId: representativeFaceId,
-          );
-        } else {
-          await facesDao.insertCluster(FaceClustersCompanion(
-            id: Value(clusterId),
-            representativeFaceId: Value(representativeFaceId),
-            centroidEmbedding: Value(centroid),
-            faceCount: Value(count),
-          ));
-        }
-      }
-
-      // Remove stale clusters that ended up with zero assigned faces after reclustering.
-      for (final cluster in existingClusters) {
-        if (!finalClusterIds.contains(cluster.id)) {
-          await facesDao.deleteCluster(cluster.id);
-        }
-      }
+      await facesDao.replaceClusterState(
+        assignments: {
+          for (final assignment in result.assignments)
+            assignment.faceId: assignment.clusterId,
+        },
+        centroids: result.clusterCentroids,
+        counts: result.clusterCounts,
+        representatives: result.clusterRepresentatives,
+      );
 
       AppLogger.info('Clustering complete: ${result.assignments.length} faces, '
           '${result.clusterCentroids.length} clusters');
     } catch (e) {
       AppLogger.error('Clustering failed', error: e);
+      rethrow;
     }
   }
 
@@ -211,8 +183,9 @@ class FaceRepositoryImpl implements FaceRepository {
   @override
   Stream<List<FaceClusterEntity>> watchClusters() {
     return facesDao.watchClusters().map(
-      (clusters) => clusters.map<FaceClusterEntity>(_mapClusterToEntity).toList(),
-    );
+          (clusters) =>
+              clusters.map<FaceClusterEntity>(_mapClusterToEntity).toList(),
+        );
   }
 
   @override
@@ -222,7 +195,8 @@ class FaceRepositoryImpl implements FaceRepository {
   }
 
   @override
-  Future<MediaItemEntity?> getRepresentativeMediaForCluster(String clusterId) async {
+  Future<MediaItemEntity?> getRepresentativeMediaForCluster(
+      String clusterId) async {
     final cluster = await facesDao.getClusterById(clusterId);
     final representativeFaceId = cluster?.representativeFaceId;
 
@@ -243,7 +217,9 @@ class FaceRepositoryImpl implements FaceRepository {
   Future<Uint8List?> getRepresentativeFaceThumbnail(String clusterId) async {
     final cluster = await facesDao.getClusterById(clusterId);
     final representativeFaceId = cluster?.representativeFaceId;
-    if (representativeFaceId == null || representativeFaceId.isEmpty) return null;
+    if (representativeFaceId == null || representativeFaceId.isEmpty) {
+      return null;
+    }
 
     final face = await facesDao.getFaceById(representativeFaceId);
     if (face == null) return null;
@@ -279,7 +255,8 @@ class FaceRepositoryImpl implements FaceRepository {
   Future<void> resetAllFaceData() async {
     await facesDao.deleteAllFacesAndClusters();
     await mediaItemsDao.resetAllFacesProcessed();
-    AppLogger.info('Reset all face data: cleared faces, clusters, and processing flags');
+    AppLogger.info(
+        'Reset all face data: cleared faces, clusters, and processing flags');
   }
 
   @override
@@ -338,7 +315,8 @@ class FaceRepositoryImpl implements FaceRepository {
       } else if (media.accountId.startsWith('google|')) {
         thumbnailUrl = 'gdrive://thumb/${media.remoteId}';
       } else if (media.accountId.startsWith('onedrive|')) {
-        thumbnailUrl = '${ProviderConstants.graphBaseUrl}/me/drive/items/${media.remoteId}/thumbnails/0/large/content';
+        thumbnailUrl =
+            '${ProviderConstants.graphBaseUrl}/me/drive/items/${media.remoteId}/thumbnails/0/large/content';
       }
     }
     if (thumbnailUrl == null || thumbnailUrl.isEmpty) return null;

@@ -30,9 +30,9 @@ Grab the latest release APK from the [Releases](https://github.com/vibhorgupta96
 - **Unified Timeline** — Browse photos and videos chronologically across all connected providers
 - **AI Face Recognition** — On-device face detection and embedding with MobileFaceNet, automatic clustering to group photos by person
 - **People View** — See all recognized individuals and browse their photos
-- **Smart Search** — Search across media metadata from all connected accounts
+- **Catalog Search** — Search file names, paths, MIME types, providers, and linked accounts
 - **Media Viewer** — Full-screen photo viewer with pinch-to-zoom and inline video playback
-- **Offline-First** — Local SQLite database keeps your library accessible without a connection
+- **Offline Catalog** — Local SQLite metadata and cached previews remain available offline; opening an uncached original requires a connection
 - **Secure Auth** — OAuth2 authentication with encrypted token storage
 
 ## Architecture
@@ -107,23 +107,48 @@ Each cloud provider requires its own OAuth2 credentials:
 | OneDrive | [Azure Portal](https://portal.azure.com/) |
 | Dropbox | [Dropbox App Console](https://www.dropbox.com/developers/apps) |
 
-Copy `.env.example` to `.env` and fill in your credentials. Pass them at build time:
+Copy the tracked example and add the public OAuth client identifiers registered
+for your application. Native clients do not embed a Google client secret.
 
 ```bash
-flutter run \
-  --dart-define=GOOGLE_WEB_CLIENT_ID=your-id.apps.googleusercontent.com \
-  --dart-define=GOOGLE_CLIENT_SECRET=your-secret
+cp .env.example .env
+# Edit .env with the three provider client IDs, then:
+flutter run --dart-define-from-file=.env
 ```
+
+The Android and iOS redirect URI for OneDrive and Dropbox is
+`com.driveinone.app://oauth2redirect`; register it in both provider consoles.
+For Google, register the Android package/signing certificate and the iOS URL
+scheme for the corresponding native clients. For iOS, also copy
+`ios/Flutter/OAuth.xcconfig.example` to `ios/Flutter/OAuth.xcconfig` and set
+`GOOGLE_REVERSED_CLIENT_ID` to the reversed iOS client ID shown by Google.
 
 ### Building a Release APK
 
+Create an upload keystore and copy `android/key.properties.example` to
+`android/key.properties`. Fill in the local keystore path and passwords; both
+the properties file and keystore are ignored by Git. Then build with:
+
 ```bash
-flutter build apk --release \
-  --dart-define=GOOGLE_WEB_CLIENT_ID=your-id.apps.googleusercontent.com \
-  --dart-define=GOOGLE_CLIENT_SECRET=your-secret
+flutter build apk --release --dart-define-from-file=.env
 ```
 
 The APK will be at `build/app/outputs/flutter-apk/app-release.apk`.
+
+Without `android/key.properties`, debug builds continue to work but release
+artifacts are intentionally left unsigned rather than using the debug key.
+
+## Quality Checks
+
+Run the same checks used by CI before opening a pull request:
+
+```bash
+flutter pub get
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test
+flutter build apk --debug
+```
 
 ## License
 

@@ -55,7 +55,8 @@ class AppLogger {
     ));
   }
 
-  static void error(String message, {Object? error, StackTrace? stackTrace, String? tag}) {
+  static void error(String message,
+      {Object? error, StackTrace? stackTrace, String? tag}) {
     developer.log(
       message,
       name: tag ?? 'DriveInOne',

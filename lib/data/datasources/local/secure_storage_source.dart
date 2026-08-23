@@ -2,7 +2,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class SecureStorageSource {
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
-    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    aOptions: AndroidOptions(),
     iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
   );
 
@@ -15,13 +15,18 @@ class SecureStorageSource {
   }) async {
     await _storage.write(key: '${accountId}_access_token', value: accessToken);
     if (refreshToken != null) {
-      await _storage.write(key: '${accountId}_refresh_token', value: refreshToken);
+      await _storage.write(
+          key: '${accountId}_refresh_token', value: refreshToken);
+    } else {
+      await _storage.delete(key: '${accountId}_refresh_token');
     }
     if (expiry != null) {
       await _storage.write(
         key: '${accountId}_token_expiry',
         value: expiry.toIso8601String(),
       );
+    } else {
+      await _storage.delete(key: '${accountId}_token_expiry');
     }
   }
 

@@ -58,7 +58,8 @@ class PersonDetailScreen extends ConsumerWidget {
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton.icon(
-                        onPressed: () => _showRenameDialog(context, ref, currentLabel),
+                        onPressed: () =>
+                            _showRenameDialog(context, ref, currentLabel),
                         icon: const Icon(Icons.person_add_alt_1),
                         label: const Text('Add name'),
                       ),
@@ -69,8 +70,8 @@ class PersonDetailScreen extends ConsumerWidget {
                   child: Text(
                     '${items.length} photos & videos',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
                   ),
                 ),
                 MediaGrid(items: items),
@@ -84,7 +85,8 @@ class PersonDetailScreen extends ConsumerWidget {
     );
   }
 
-  void _showRenameDialog(BuildContext context, WidgetRef ref, String currentName) {
+  void _showRenameDialog(
+      BuildContext context, WidgetRef ref, String currentName) {
     final controller = TextEditingController(text: currentName);
     showDialog(
       context: context,
@@ -107,9 +109,12 @@ class PersonDetailScreen extends ConsumerWidget {
             onPressed: () {
               final name = controller.text.trim();
               if (name.isNotEmpty) {
-                ref.read(faceRepositoryProvider.future).then(
-                  (repo) => repo.renameCluster(clusterId, name),
-                ).catchError((_) {});
+                ref
+                    .read(faceRepositoryProvider.future)
+                    .then(
+                      (repo) => repo.renameCluster(clusterId, name),
+                    )
+                    .catchError((_) {});
               }
               Navigator.pop(context);
             },

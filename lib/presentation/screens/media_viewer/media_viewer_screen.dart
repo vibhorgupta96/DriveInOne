@@ -83,7 +83,8 @@ class MediaViewerScreen extends ConsumerWidget {
         children: [
           SizedBox(
             width: 100,
-            child: Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+            child: Text(label,
+                style: const TextStyle(fontWeight: FontWeight.w500)),
           ),
           Expanded(child: Text(value)),
         ],

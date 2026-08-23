@@ -18,7 +18,7 @@ class ProviderIcon extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: _getColor().withOpacity(0.9),
+        color: _getColor().withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(size / 4),
       ),
       child: Center(

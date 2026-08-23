@@ -7,5 +7,6 @@ class LinkAccount {
 
   const LinkAccount(this._repository);
 
-  Future<AccountEntity> call(ProviderType type) => _repository.linkAccount(type);
+  Future<AccountEntity> call(ProviderType type) =>
+      _repository.linkAccount(type);
 }

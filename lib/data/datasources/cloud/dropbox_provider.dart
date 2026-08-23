@@ -5,7 +5,6 @@ import '../../../core/constants/provider_constants.dart';
 import '../../../core/enums/media_type.dart';
 import '../../../core/enums/provider_type.dart';
 import '../../../core/errors/exceptions.dart';
-import '../../../core/utils/logger.dart';
 import '../../models/account_model.dart';
 import '../../models/media_item_model.dart';
 import '../../models/sync_result_model.dart';
@@ -18,12 +17,6 @@ class DropboxProvider extends CloudProvider {
     connectTimeout: const Duration(seconds: 30),
     receiveTimeout: const Duration(seconds: 30),
   ));
-  final Dio _contentDio = Dio(BaseOptions(
-    baseUrl: ProviderConstants.dropboxContentBaseUrl,
-    connectTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(seconds: 30),
-  ));
-
   @override
   String get providerId => 'dropbox';
 
@@ -33,9 +26,13 @@ class DropboxProvider extends CloudProvider {
   @override
   Future<AccountModel> login() async {
     try {
+      final appKey = ProviderConstants.requireConfigured(
+        ProviderConstants.dropboxAppKey,
+        'DROPBOX_APP_KEY',
+      );
       final result = await _appAuth.authorizeAndExchangeCode(
         AuthorizationTokenRequest(
-          ProviderConstants.dropboxAppKey,
+          appKey,
           ProviderConstants.dropboxRedirectUri,
           serviceConfiguration: const AuthorizationServiceConfiguration(
             authorizationEndpoint: ProviderConstants.dropboxAuthEndpoint,
@@ -46,7 +43,7 @@ class DropboxProvider extends CloudProvider {
         ),
       );
 
-      if (result == null || result.accessToken == null) {
+      if (result.accessToken == null) {
         throw const AuthException(message: 'Dropbox sign-in failed');
       }
 
@@ -80,6 +77,8 @@ class DropboxProvider extends CloudProvider {
         refreshToken: result.refreshToken,
         tokenExpiry: result.accessTokenExpirationDateTime,
       );
+    } on StateError catch (e) {
+      throw AuthException(message: e.message);
     } catch (e) {
       if (e is AuthException) rethrow;
       throw AuthException(message: 'Dropbox sign-in failed', originalError: e);
@@ -115,10 +114,14 @@ class DropboxProvider extends CloudProvider {
           message: 'No refresh token available for Dropbox');
     }
 
+    final appKey = ProviderConstants.requireConfigured(
+      ProviderConstants.dropboxAppKey,
+      'DROPBOX_APP_KEY',
+    );
     try {
       final result = await _appAuth.token(
         TokenRequest(
-          ProviderConstants.dropboxAppKey,
+          appKey,
           ProviderConstants.dropboxRedirectUri,
           serviceConfiguration: const AuthorizationServiceConfiguration(
             authorizationEndpoint: ProviderConstants.dropboxAuthEndpoint,
@@ -129,7 +132,7 @@ class DropboxProvider extends CloudProvider {
         ),
       );
 
-      if (result == null || result.accessToken == null) {
+      if (result.accessToken == null) {
         throw const AuthException(message: 'Dropbox token refresh failed');
       }
 
@@ -193,7 +196,9 @@ class DropboxProvider extends CloudProvider {
 
           if (tag == 'deleted') {
             final pathLower = entry['path_lower'] as String?;
-            if (pathLower != null) deletedIds.add(pathLower);
+            if (pathLower != null) {
+              deletedIds.add(deletionKeyForPath(pathLower));
+            }
             continue;
           }
 
@@ -205,9 +210,8 @@ class DropboxProvider extends CloudProvider {
 
           // Check if it's a photo or video
           final name = (entry['name'] as String? ?? '').toLowerCase();
-          final isMedia = mediaTag == 'photo' ||
-              mediaTag == 'video' ||
-              _isMediaFile(name);
+          final isMedia =
+              mediaTag == 'photo' || mediaTag == 'video' || _isMediaFile(name);
 
           if (!isMedia) continue;
 
@@ -253,30 +257,41 @@ class DropboxProvider extends CloudProvider {
     return 'dropbox://thumbnail$fileId';
   }
 
+  static const String deletionPathKeyPrefix = 'dropbox-path:';
+
+  static String deletionKeyForPath(String pathLower) =>
+      '$deletionPathKeyPrefix${Uri.encodeComponent(pathLower)}';
+
+  static String? pathFromDeletionKey(String key) {
+    if (!key.startsWith(deletionPathKeyPrefix)) return null;
+    return Uri.decodeComponent(key.substring(deletionPathKeyPrefix.length));
+  }
+
+  static const _imageExtensions = [
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.bmp',
+    '.webp',
+    '.heic',
+    '.heif',
+    '.tiff',
+  ];
+  static const _videoExtensions = [
+    '.mp4',
+    '.mov',
+    '.avi',
+    '.mkv',
+    '.wmv',
+    '.flv',
+    '.webm',
+    '.m4v',
+  ];
+
   bool _isMediaFile(String name) {
-    const imageExtensions = [
-      '.jpg',
-      '.jpeg',
-      '.png',
-      '.gif',
-      '.bmp',
-      '.webp',
-      '.heic',
-      '.heif',
-      '.tiff'
-    ];
-    const videoExtensions = [
-      '.mp4',
-      '.mov',
-      '.avi',
-      '.mkv',
-      '.wmv',
-      '.flv',
-      '.webm',
-      '.m4v'
-    ];
-    return imageExtensions.any(name.endsWith) ||
-        videoExtensions.any(name.endsWith);
+    return _imageExtensions.any(name.endsWith) ||
+        _videoExtensions.any(name.endsWith);
   }
 
   MediaItemModel _mapEntryToMediaItem(Map<String, dynamic> entry) {
@@ -321,7 +336,8 @@ class DropboxProvider extends CloudProvider {
       fileName: name,
       mimeType: mimeType,
       mediaType: mediaType,
-      thumbnailUrl: pathLower.isNotEmpty ? 'dropbox://thumbnail$pathLower' : null,
+      thumbnailUrl:
+          pathLower.isNotEmpty ? 'dropbox://thumbnail$pathLower' : null,
       fullSizeUrl: null, // Requires temporary link
       width: dimensions?['width'] as int?,
       height: dimensions?['height'] as int?,
@@ -332,19 +348,7 @@ class DropboxProvider extends CloudProvider {
     );
   }
 
-  bool _isVideoFile(String name) {
-    const videoExtensions = [
-      '.mp4',
-      '.mov',
-      '.avi',
-      '.mkv',
-      '.wmv',
-      '.flv',
-      '.webm',
-      '.m4v'
-    ];
-    return videoExtensions.any(name.endsWith);
-  }
+  bool _isVideoFile(String name) => _videoExtensions.any(name.endsWith);
 
   String _getExtension(String name) {
     final dotIndex = name.lastIndexOf('.');

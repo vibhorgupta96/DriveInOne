@@ -3,7 +3,6 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/enums/media_type.dart';
 import '../../../../domain/entities/media_item.dart';
 import '../../../widgets/common/authenticated_image.dart';
-import '../../../widgets/common/provider_icon.dart';
 
 class MediaThumbnail extends StatelessWidget {
   final MediaItemEntity item;
@@ -22,6 +21,7 @@ class MediaThumbnail extends StatelessWidget {
             AuthenticatedImage(
               imageUrl: item.thumbnailUrl,
               accountId: item.accountId,
+              cacheKey: 'media:${item.id}',
               fit: BoxFit.cover,
             ),
             if (item.mediaType == MediaType.video)
@@ -29,15 +29,17 @@ class MediaThumbnail extends StatelessWidget {
                 bottom: 4,
                 right: 4,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.7),
+                    color: Colors.black.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.play_arrow, color: Colors.white, size: 12),
+                      const Icon(Icons.play_arrow,
+                          color: Colors.white, size: 12),
                       const SizedBox(width: 2),
                       Text(
                         item.formattedDuration,

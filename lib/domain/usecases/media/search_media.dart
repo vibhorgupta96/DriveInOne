@@ -6,6 +6,10 @@ class SearchMedia {
 
   const SearchMedia(this._repository);
 
-  Future<List<MediaItemEntity>> call(String query) =>
-      _repository.searchByFileName(query);
+  Future<List<MediaItemEntity>> call(
+    String query, {
+    int limit = 100,
+    int offset = 0,
+  }) =>
+      _repository.searchMedia(query, limit: limit, offset: offset);
 }

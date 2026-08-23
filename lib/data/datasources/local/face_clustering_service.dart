@@ -2,7 +2,6 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 import '../../../core/constants/app_constants.dart';
-import '../../../core/utils/logger.dart';
 import '../../models/face_model.dart';
 import 'face_embedding_service.dart';
 
@@ -42,7 +41,7 @@ class FaceClusteringService {
     List<FaceModel> faces, {
     Map<String, List<double>>? existingCentroids,
   }) {
-    final threshold = AppConstants.faceSimilarityThreshold;
+    const threshold = AppConstants.faceSimilarityThreshold;
     final clusters = <String, List<FaceModel>>{}; // clusterId -> faces
     final centroids = <String, List<double>>{}; // clusterId -> centroid
 

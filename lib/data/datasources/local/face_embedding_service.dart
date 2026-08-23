@@ -39,7 +39,9 @@ class FaceEmbeddingService {
       _embeddingDim = outputShape[1];
 
       _isInitialized = true;
-      AppLogger.info('MobileFaceNet loaded: input=${inputShape}, output=${outputShape}');
+      AppLogger.info(
+        'MobileFaceNet loaded: input=$inputShape, output=$outputShape',
+      );
     } catch (e) {
       AppLogger.error('Failed to load MobileFaceNet model', error: e);
       rethrow;
@@ -84,7 +86,18 @@ class FaceEmbeddingService {
   }
 
   static List<double> bytesToEmbedding(Uint8List bytes) {
-    final float32List = bytes.buffer.asFloat32List();
+    if (bytes.lengthInBytes % Float32List.bytesPerElement != 0) {
+      throw ArgumentError.value(
+        bytes.lengthInBytes,
+        'bytes.lengthInBytes',
+        'Embedding byte length must be a multiple of '
+            '${Float32List.bytesPerElement}',
+      );
+    }
+    final float32List = bytes.buffer.asFloat32List(
+      bytes.offsetInBytes,
+      bytes.lengthInBytes ~/ Float32List.bytesPerElement,
+    );
     return float32List.toList();
   }
 

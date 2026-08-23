@@ -21,6 +21,17 @@ class TokenExpiredException implements Exception {
   String toString() => message;
 }
 
+class FacePipelineException implements Exception {
+  final Map<String, Object> failures;
+
+  const FacePipelineException(this.failures);
+
+  @override
+  String toString() =>
+      'Face scanning failed for ${failures.length} media item(s). '
+      'They were left unprocessed and will be retried.';
+}
+
 class PipelineProgress {
   final int processed;
   final int total;
@@ -34,7 +45,8 @@ class PipelineProgress {
 
   double get fraction => total > 0 ? processed / total : 0;
 
-  static const idle = PipelineProgress(processed: 0, total: 0, isRunning: false);
+  static const idle =
+      PipelineProgress(processed: 0, total: 0, isRunning: false);
 }
 
 class AIPipelineOrchestrator {
@@ -44,8 +56,8 @@ class AIPipelineOrchestrator {
   final SecureStorageSource secureStorage;
   final Dio _dio = Dio();
 
-  bool _isRunning = false;
-  bool get isRunning => _isRunning;
+  Future<void>? _activeRun;
+  bool get isRunning => _activeRun != null;
 
   final _progressController = StreamController<PipelineProgress>.broadcast();
   Stream<PipelineProgress> get progressStream => _progressController.stream;
@@ -70,8 +82,11 @@ class AIPipelineOrchestrator {
     for (final account in accounts) {
       try {
         final accessToken = await secureStorage.getAccessToken(account.id);
-        if (accessToken == null) {
-          AppLogger.error('Face pipeline: no stored token for ${account.id}, skipping');
+        if (accessToken == null || accessToken.isEmpty) {
+          _expiredAccounts.add(account.id);
+          AppLogger.error(
+            'Face pipeline: no stored token for ${account.id}, skipping',
+          );
           continue;
         }
 
@@ -80,7 +95,9 @@ class AIPipelineOrchestrator {
         };
         AppLogger.info('Face pipeline: using stored token for ${account.id}');
       } catch (e) {
-        AppLogger.error('Face pipeline: failed to load token for ${account.id}', error: e);
+        _expiredAccounts.add(account.id);
+        AppLogger.error('Face pipeline: failed to load token for ${account.id}',
+            error: e);
       }
     }
 
@@ -93,112 +110,139 @@ class AIPipelineOrchestrator {
 
   /// Processes unscanned media items in batches.
   /// Throws [TokenExpiredException] if stored tokens are expired/missing.
-  Future<void> processNewMedia({int batchSize = AppConstants.faceBatchSize}) async {
-    if (_isRunning) return;
-    _isRunning = true;
+  Future<void> processNewMedia({int batchSize = AppConstants.faceBatchSize}) {
+    final activeRun = _activeRun;
+    if (activeRun != null) return activeRun;
+    if (batchSize <= 0) {
+      return Future.error(ArgumentError.value(batchSize, 'batchSize'));
+    }
 
+    final run = _processNewMedia(batchSize);
+    _activeRun = run;
+    return run.whenComplete(() {
+      if (identical(_activeRun, run)) _activeRun = null;
+    });
+  }
+
+  Future<void> _processNewMedia(int batchSize) async {
     try {
       final totalMedia = await mediaItemsDao.getMediaCount();
-      final allUnprocessed = await mediaItemsDao.getMediaItemsWithoutFaces(10000);
-      final total = allUnprocessed.length;
-      AppLogger.info('Face pipeline: $total unprocessed out of $totalMedia total media items');
+      final alreadyProcessed = await mediaItemsDao.getProcessedFacesCount();
+      final allUnprocessed =
+          await mediaItemsDao.getMediaItemsWithoutFaces(10000);
+      final total = totalMedia - alreadyProcessed;
+      AppLogger.info(
+          'Face pipeline: $total unprocessed out of $totalMedia total media items');
 
       if (total > 0) {
-        final withThumb = allUnprocessed.where((i) => i.thumbnailUrl != null && i.thumbnailUrl!.isNotEmpty).length;
-        final constructable = allUnprocessed.where((i) =>
-            (i.thumbnailUrl == null || i.thumbnailUrl!.isEmpty) && _constructThumbnailUrl(i) != null).length;
-        AppLogger.info('Face pipeline: $withThumb have thumbnailUrl, $constructable can construct URL, '
+        final withThumb = allUnprocessed
+            .where((i) => i.thumbnailUrl != null && i.thumbnailUrl!.isNotEmpty)
+            .length;
+        final constructable = allUnprocessed
+            .where((i) =>
+                (i.thumbnailUrl == null || i.thumbnailUrl!.isEmpty) &&
+                _constructThumbnailUrl(i) != null)
+            .length;
+        AppLogger.info(
+            'Face pipeline: $withThumb have thumbnailUrl, $constructable can construct URL, '
             '${total - withThumb - constructable} have no thumbnail source');
         await _prepareAuthHeaders();
 
-        int processed = 0;
-        final skippedIds = <String>{};
+        var completed = 0;
+        final attemptedIds = <String>{};
+        final failures = <String, Object>{};
 
         AppLogger.info('Face pipeline: starting, $total items to process');
-        _progressController.add(PipelineProgress(processed: 0, total: total, isRunning: true));
+        _progressController
+            .add(PipelineProgress(processed: 0, total: total, isRunning: true));
 
         while (true) {
-          final items = await mediaItemsDao.getMediaItemsWithoutFaces(batchSize);
+          // Previously failed rows remain unprocessed at the head of this
+          // query. Expand the window by the number already attempted so they
+          // cannot hide every later media item in this run.
+          final items = await mediaItemsDao.getMediaItemsWithoutFaces(
+            batchSize + attemptedIds.length,
+          );
           if (items.isEmpty) break;
 
-          final toProcess = items.where((i) =>
-              !skippedIds.contains(i.id) && !_expiredAccounts.contains(i.accountId)).toList();
+          final toProcess =
+              items.where((item) => !attemptedIds.contains(item.id)).toList();
           if (toProcess.isEmpty) break;
 
           for (final item in toProcess) {
+            attemptedIds.add(item.id);
             if (_expiredAccounts.contains(item.accountId)) {
-              skippedIds.add(item.id);
+              failures[item.id] = TokenExpiredException(
+                'No usable token for account ${item.accountId}',
+              );
+              _progressController.add(PipelineProgress(
+                processed: attemptedIds.length,
+                total: total,
+                isRunning: true,
+              ));
               continue;
             }
 
             try {
-              if (item.mediaType == MediaTypeEnum.video) {
-                final headers = _authHeadersCache[item.accountId];
-                final frames = headers == null
-                    ? const <Uint8List>[]
-                    : await _extractVideoFrames(item, headers);
-
-                if (frames.isEmpty) {
-                  // Fallback to provider thumbnail path when frame extraction fails.
-                  final thumbnailBytes = await _downloadThumbnail(item);
-                  if (thumbnailBytes != null) {
-                    await faceRepository.processMediaItem(item.id, thumbnailBytes);
-                  }
-                } else {
-                  for (final frame in frames) {
-                    await faceRepository.processMediaItem(item.id, frame);
-                  }
-                }
-
-                await mediaItemsDao.markFacesProcessed(item.id);
-                processed++;
-                _progressController.add(
-                  PipelineProgress(processed: processed, total: total, isRunning: true),
-                );
-                continue;
-              }
-
               final thumbnailBytes = await _downloadThumbnail(item);
               if (thumbnailBytes == null) {
+                // This is reserved for a permanent, provider-confirmed lack of
+                // any thumbnail source. Authentication and transport failures
+                // throw and therefore remain retryable.
                 await mediaItemsDao.markFacesProcessed(item.id);
-                processed++;
-                _progressController.add(
-                  PipelineProgress(processed: processed, total: total, isRunning: true),
-                );
-                continue;
+              } else {
+                await faceRepository.processMediaItem(item.id, thumbnailBytes);
               }
-
-              await faceRepository.processMediaItem(item.id, thumbnailBytes);
+              completed++;
+            } on TokenExpiredException catch (e) {
+              _expiredAccounts.add(item.accountId);
+              failures[item.id] = e;
+              AppLogger.error(
+                'Authentication unavailable for media item ${item.id}',
+                error: e,
+              );
             } catch (e) {
-              AppLogger.error('Failed to process media item ${item.id}', error: e);
-              skippedIds.add(item.id);
+              AppLogger.error('Failed to process media item ${item.id}',
+                  error: e);
+              failures[item.id] = e;
             }
-            processed++;
-            _progressController.add(PipelineProgress(processed: processed, total: total, isRunning: true));
+            _progressController.add(PipelineProgress(
+              processed: attemptedIds.length,
+              total: total,
+              isRunning: true,
+            ));
           }
-
-          await faceRepository.runClustering();
         }
+
+        // Cluster once after all independently processable media has been
+        // attempted. Clustering errors are logged by the repository and must
+        // propagate to this caller.
+        await faceRepository.runClustering();
 
         if (_expiredAccounts.isNotEmpty) {
           AppLogger.info('Face pipeline: tokens expired for accounts: '
               '${_expiredAccounts.join(', ')}. Sync those accounts to process remaining items.');
         }
-        AppLogger.info('Face pipeline: complete, processed $processed items, '
-            '${skippedIds.length} skipped due to errors');
+        AppLogger.info('Face pipeline: complete, processed $completed items, '
+            '${failures.length} skipped due to errors');
+
+        if (_expiredAccounts.isNotEmpty) {
+          throw TokenExpiredException(
+            'Authentication is unavailable for ${_expiredAccounts.length} '
+            'account(s). Sync those accounts and retry face scanning.',
+          );
+        }
+        if (failures.isNotEmpty) {
+          throw FacePipelineException(Map.unmodifiable(failures));
+        }
       } else {
         AppLogger.info('Face pipeline: no unprocessed media items');
+        await faceRepository.runClustering();
       }
     } catch (e) {
       AppLogger.error('Face pipeline failed', error: e);
       rethrow;
     } finally {
-      try {
-        await faceRepository.runClustering();
-      } catch (e) {
-        AppLogger.error('Face pipeline: final clustering failed', error: e);
-      }
-      _isRunning = false;
       _authHeadersCache.clear();
       _expiredAccounts.clear();
       _progressController.add(PipelineProgress.idle);
@@ -208,7 +252,9 @@ class AIPipelineOrchestrator {
   /// Constructs a thumbnail URL for items that were synced before providers
   /// started persisting stable thumbnail URL patterns.
   String? _constructThumbnailUrl(MediaItem item) {
-    if (item.accountId.startsWith('dropbox|') && item.remotePath != null && item.remotePath!.isNotEmpty) {
+    if (item.accountId.startsWith('dropbox|') &&
+        item.remotePath != null &&
+        item.remotePath!.isNotEmpty) {
       return 'dropbox://thumbnail${item.remotePath}';
     }
     if (item.accountId.startsWith('onedrive|')) {
@@ -224,16 +270,21 @@ class AIPipelineOrchestrator {
   /// Throws on transient download errors so the caller can skip without
   /// marking the item as processed.
   Future<Uint8List?> _downloadThumbnail(MediaItem item) async {
+    final headers = _authHeadersCache[item.accountId];
+    if (headers == null) {
+      _expiredAccounts.add(item.accountId);
+      throw TokenExpiredException(
+        'No stored access token for account ${item.accountId}',
+      );
+    }
+
     var thumbnailUrl = item.thumbnailUrl;
     if (thumbnailUrl == null || thumbnailUrl.isEmpty) {
       // For videos, fall back to extracting a frame from stream URL when
       // providers don't expose thumbnails in metadata.
       if (item.mediaType == MediaTypeEnum.video) {
-        final headers = _authHeadersCache[item.accountId];
-        if (headers != null) {
-          final frame = await _extractVideoFrame(item, headers);
-          if (frame != null) return frame;
-        }
+        final frame = await _extractVideoFrame(item, headers);
+        if (frame != null) return frame;
       }
       thumbnailUrl = _constructThumbnailUrl(item);
       if (thumbnailUrl == null) return null;
@@ -241,12 +292,10 @@ class AIPipelineOrchestrator {
 
     // Convert stale googleusercontent.com URLs to the stable gdrive:// pattern
     // so we always fetch a fresh thumbnail link from the API.
-    if (thumbnailUrl.contains('googleusercontent.com') && item.accountId.startsWith('google|')) {
+    if (thumbnailUrl.contains('googleusercontent.com') &&
+        item.accountId.startsWith('google|')) {
       thumbnailUrl = 'gdrive://thumb/${item.remoteId}';
     }
-
-    final headers = _authHeadersCache[item.accountId];
-    if (headers == null) return null;
 
     try {
       if (thumbnailUrl.startsWith('dropbox://thumbnail')) {
@@ -272,22 +321,29 @@ class AIPipelineOrchestrator {
       return Uint8List.fromList(response.data);
     } on DioException catch (e) {
       if (e.response?.statusCode == 401) {
-        AppLogger.error('Face pipeline: 401 for account ${item.accountId} — marking expired');
+        AppLogger.error(
+            'Face pipeline: 401 for account ${item.accountId} — marking expired');
         _expiredAccounts.add(item.accountId);
+        throw TokenExpiredException(
+          'Access token expired for account ${item.accountId}',
+        );
       } else if (item.mediaType == MediaTypeEnum.video) {
         // If provider thumbnail endpoint fails for videos, try extracting
         // from the original video stream before giving up.
         final frame = await _extractVideoFrame(item, headers);
         if (frame != null) return frame;
-        AppLogger.error('Failed to get video thumbnail/frame for ${item.id}', error: e);
+        AppLogger.error('Failed to get video thumbnail/frame for ${item.id}',
+            error: e);
       } else {
-        AppLogger.error('Failed to download thumbnail for ${item.id}', error: e);
+        AppLogger.error('Failed to download thumbnail for ${item.id}',
+            error: e);
       }
       rethrow;
     }
   }
 
-  Future<Uint8List> _downloadDropboxThumbnail(String url, Map<String, String> headers) async {
+  Future<Uint8List> _downloadDropboxThumbnail(
+      String url, Map<String, String> headers) async {
     final path = url.replaceFirst('dropbox://thumbnail', '');
     final apiArg = jsonEncode({
       'resource': {'.tag': 'path', 'path': path},
@@ -306,7 +362,8 @@ class AIPipelineOrchestrator {
 
   /// Fetches a fresh thumbnailLink from the Google Drive API, then downloads
   /// the actual thumbnail bytes. This avoids stale/expired thumbnail URLs.
-  Future<Uint8List?> _downloadGDriveThumbnail(String url, Map<String, String> headers) async {
+  Future<Uint8List?> _downloadGDriveThumbnail(
+      String url, Map<String, String> headers) async {
     final fileId = url.replaceFirst('gdrive://thumb/', '');
 
     final metaResponse = await _dio.get(
@@ -328,12 +385,14 @@ class AIPipelineOrchestrator {
     return Uint8List.fromList(thumbResponse.data);
   }
 
-  Future<Uint8List?> _extractVideoFrame(MediaItem item, Map<String, String> headers) async {
+  Future<Uint8List?> _extractVideoFrame(
+      MediaItem item, Map<String, String> headers) async {
     final frames = await _extractVideoFrames(item, headers);
     return frames.isNotEmpty ? frames.first : null;
   }
 
-  Future<List<Uint8List>> _extractVideoFrames(MediaItem item, Map<String, String> headers) async {
+  Future<List<Uint8List>> _extractVideoFrames(
+      MediaItem item, Map<String, String> headers) async {
     if (!_videoThumbnailPluginAvailable) return const [];
 
     try {
@@ -369,7 +428,7 @@ class AIPipelineOrchestrator {
       return const [];
     } catch (e) {
       AppLogger.error('Failed to extract video frame for ${item.id}', error: e);
-      return const [];
+      rethrow;
     }
   }
 
@@ -399,7 +458,8 @@ class AIPipelineOrchestrator {
     return hash;
   }
 
-  Future<String?> _resolveVideoStreamUrl(MediaItem item, Map<String, String> headers) async {
+  Future<String?> _resolveVideoStreamUrl(
+      MediaItem item, Map<String, String> headers) async {
     // Prefer a direct URL if already available.
     if (item.fullSizeUrl != null && item.fullSizeUrl!.isNotEmpty) {
       return item.fullSizeUrl;

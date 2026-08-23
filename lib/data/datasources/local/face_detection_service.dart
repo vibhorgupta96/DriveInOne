@@ -4,6 +4,16 @@ import 'dart:ui';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../../../core/utils/logger.dart';
 
+class FaceDetectionException implements Exception {
+  final String message;
+  final Object cause;
+
+  const FaceDetectionException(this.message, this.cause);
+
+  @override
+  String toString() => '$message: $cause';
+}
+
 class DetectedFace {
   final Rect boundingBox;
   final Point<double>? leftEye;
@@ -51,7 +61,7 @@ class FaceDetectionService {
 
   Future<void> _reinitializeDetector() async {
     try {
-      _faceDetector.close();
+      await _faceDetector.close();
     } catch (_) {}
     _faceDetector = _createDetector();
   }
@@ -80,7 +90,8 @@ class FaceDetectionService {
   }
 
   /// Detects faces in an image from bytes.
-  Future<List<DetectedFace>> detectFaces(Uint8List imageBytes, {
+  Future<List<DetectedFace>> detectFaces(
+    Uint8List imageBytes, {
     required int imageWidth,
     required int imageHeight,
   }) async {
@@ -100,7 +111,8 @@ class FaceDetectionService {
     } catch (e) {
       final msg = e.toString().toLowerCase();
       if (msg.contains('precondition')) {
-        AppLogger.warning('Face detector precondition failed (bytes), recreating detector and retrying once');
+        AppLogger.warning(
+            'Face detector precondition failed (bytes), recreating detector and retrying once');
         try {
           await _reinitializeDetector();
           final inputImage = InputImage.fromBytes(
@@ -116,11 +128,14 @@ class FaceDetectionService {
           return faces.map(_toDetectedFace).toList();
         } catch (retryError) {
           AppLogger.error('Face detection retry failed', error: retryError);
-          return [];
+          throw FaceDetectionException(
+            'Face detection retry failed',
+            retryError,
+          );
         }
       }
       AppLogger.error('Face detection failed', error: e);
-      return [];
+      throw FaceDetectionException('Face detection failed', e);
     }
   }
 
@@ -133,19 +148,24 @@ class FaceDetectionService {
     } catch (e) {
       final msg = e.toString().toLowerCase();
       if (msg.contains('precondition')) {
-        AppLogger.warning('Face detector precondition failed (file), recreating detector and retrying once');
+        AppLogger.warning(
+            'Face detector precondition failed (file), recreating detector and retrying once');
         try {
           await _reinitializeDetector();
           final inputImage = InputImage.fromFilePath(filePath);
           final faces = await _faceDetector.processImage(inputImage);
           return faces.map(_toDetectedFace).toList();
         } catch (retryError) {
-          AppLogger.error('Face detection from file retry failed', error: retryError);
-          return [];
+          AppLogger.error('Face detection from file retry failed',
+              error: retryError);
+          throw FaceDetectionException(
+            'Face detection from file retry failed',
+            retryError,
+          );
         }
       }
       AppLogger.error('Face detection from file failed', error: e);
-      return [];
+      throw FaceDetectionException('Face detection from file failed', e);
     }
   }
 

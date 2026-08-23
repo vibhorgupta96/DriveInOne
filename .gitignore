@@ -34,7 +34,6 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
-pubspec.lock
 
 # Symbolication related
 app.*.symbols
@@ -61,10 +60,13 @@ app.*.map.json
 # Environment & secrets
 .env
 .env.*
+!.env.example
 *.jks
 *.keystore
+/android/key.properties
 google-services.json
 GoogleService-Info.plist
+/ios/Flutter/OAuth.xcconfig
 
 # Coverage
 coverage/

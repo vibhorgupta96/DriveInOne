@@ -1,7 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_appauth/flutter_appauth.dart';
 import '../../../core/constants/provider_constants.dart';
-import '../../../core/enums/media_type.dart';
 import '../../../core/enums/provider_type.dart';
 import '../../../core/errors/exceptions.dart';
 import '../../../core/utils/logger.dart';
@@ -12,11 +11,36 @@ import 'cloud_provider.dart';
 
 class OneDriveProvider extends CloudProvider {
   final FlutterAppAuth _appAuth = const FlutterAppAuth();
-  final Dio _dio = Dio(BaseOptions(
-    baseUrl: ProviderConstants.graphBaseUrl,
-    connectTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(seconds: 30),
-  ));
+  late final Dio _dio;
+
+  OneDriveProvider() {
+    _dio = Dio(BaseOptions(
+      baseUrl: ProviderConstants.graphBaseUrl,
+      connectTimeout: const Duration(seconds: 30),
+      receiveTimeout: const Duration(seconds: 30),
+    ));
+    _dio.interceptors.add(InterceptorsWrapper(
+      onError: (error, handler) async {
+        if (error.response?.statusCode == 401 &&
+            refreshToken != null &&
+            error.requestOptions.extra['oneDriveAuthRetried'] != true) {
+          try {
+            await refreshTokenIfNeeded(force: true);
+            final headers = await getAuthHeaders();
+            final opts = error.requestOptions;
+            opts.extra['oneDriveAuthRetried'] = true;
+            opts.headers.addAll(headers);
+            final response = await Dio().fetch(opts);
+            return handler.resolve(response);
+          } catch (e) {
+            AppLogger.error('OneDrive 401 retry failed', error: e);
+            return handler.next(error);
+          }
+        }
+        return handler.next(error);
+      },
+    ));
+  }
 
   @override
   String get providerId => 'onedrive';
@@ -27,9 +51,13 @@ class OneDriveProvider extends CloudProvider {
   @override
   Future<AccountModel> login() async {
     try {
+      final clientId = ProviderConstants.requireConfigured(
+        ProviderConstants.microsoftClientId,
+        'MICROSOFT_CLIENT_ID',
+      );
       final result = await _appAuth.authorizeAndExchangeCode(
         AuthorizationTokenRequest(
-          ProviderConstants.microsoftClientId,
+          clientId,
           ProviderConstants.microsoftRedirectUri,
           discoveryUrl: ProviderConstants.microsoftDiscoveryUrl,
           scopes: ProviderConstants.microsoftScopes,
@@ -37,7 +65,7 @@ class OneDriveProvider extends CloudProvider {
         ),
       );
 
-      if (result == null || result.accessToken == null) {
+      if (result.accessToken == null) {
         throw const AuthException(message: 'OneDrive sign-in failed');
       }
 
@@ -67,10 +95,11 @@ class OneDriveProvider extends CloudProvider {
         refreshToken: result.refreshToken,
         tokenExpiry: result.accessTokenExpirationDateTime,
       );
+    } on StateError catch (e) {
+      throw AuthException(message: e.message);
     } catch (e) {
       if (e is AuthException) rethrow;
-      throw AuthException(
-          message: 'OneDrive sign-in failed', originalError: e);
+      throw AuthException(message: 'OneDrive sign-in failed', originalError: e);
     }
   }
 
@@ -94,9 +123,13 @@ class OneDriveProvider extends CloudProvider {
     }
 
     try {
+      final clientId = ProviderConstants.requireConfigured(
+        ProviderConstants.microsoftClientId,
+        'MICROSOFT_CLIENT_ID',
+      );
       final result = await _appAuth.token(
         TokenRequest(
-          ProviderConstants.microsoftClientId,
+          clientId,
           ProviderConstants.microsoftRedirectUri,
           discoveryUrl: ProviderConstants.microsoftDiscoveryUrl,
           refreshToken: refreshToken,
@@ -104,7 +137,7 @@ class OneDriveProvider extends CloudProvider {
         ),
       );
 
-      if (result == null || result.accessToken == null) {
+      if (result.accessToken == null) {
         throw const AuthException(message: 'OneDrive token refresh failed');
       }
 
@@ -130,11 +163,9 @@ class OneDriveProvider extends CloudProvider {
       String? nextLink;
       String? deltaLink;
 
-      if (syncToken == null) {
-        nextLink = '/me/drive/root/delta';
-      } else {
-        nextLink = '/me/drive/root/delta(token=\'$syncToken\')';
-      }
+      // Microsoft Graph delta/next links are opaque URLs. Persist and replay
+      // them exactly; parsing or re-wrapping the token corrupts valid links.
+      nextLink = initialDeltaRequestUrl(syncToken);
 
       do {
         final response = await _dio.get(
@@ -170,17 +201,10 @@ class OneDriveProvider extends CloudProvider {
         deltaLink = data['@odata.deltaLink'] as String?;
       } while (nextLink != null);
 
-      // Extract token from deltaLink
-      String? newToken;
-      if (deltaLink != null) {
-        final uri = Uri.parse(deltaLink);
-        newToken = uri.queryParameters['token'] ?? deltaLink;
-      }
-
       return SyncResultModel(
         changedItems: changedItems,
         deletedRemoteIds: deletedIds,
-        newSyncToken: newToken,
+        newSyncToken: deltaLink ?? syncToken,
       );
     } on DioException catch (e) {
       throw ApiException(
@@ -191,13 +215,16 @@ class OneDriveProvider extends CloudProvider {
     }
   }
 
+  static String initialDeltaRequestUrl(String? syncToken) =>
+      syncToken ?? '/me/drive/root/delta';
+
   @override
   Future<String> getVideoStreamUrl(String fileId) async {
     final headers = await getAuthHeaders();
     final response = await _dio.get(
       '/me/drive/items/$fileId',
       options: Options(headers: headers),
-      queryParameters: {'select': '@microsoft.graph.downloadUrl'},
+      queryParameters: {r'$select': '@microsoft.graph.downloadUrl'},
     );
     return response.data['@microsoft.graph.downloadUrl'] as String? ?? '';
   }
@@ -239,14 +266,14 @@ class OneDriveProvider extends CloudProvider {
       fileName: item['name'] as String? ?? 'Untitled',
       mimeType: mimeType,
       mediaType: MediaItemModel.mediaTypeFromMime(mimeType),
-      thumbnailUrl: '${ProviderConstants.graphBaseUrl}/me/drive/items/$remoteId/thumbnails/0/large/content',
+      thumbnailUrl:
+          '${ProviderConstants.graphBaseUrl}/me/drive/items/$remoteId/thumbnails/0/large/content',
       fullSizeUrl: item['@microsoft.graph.downloadUrl'] as String?,
       width: image?['width'] as int? ?? video?['width'] as int?,
       height: image?['height'] as int? ?? video?['height'] as int?,
       fileSize: item['size'] as int?,
-      durationSeconds: video != null
-          ? ((video['duration'] as int?) ?? 0) ~/ 1000
-          : null,
+      durationSeconds:
+          video != null ? ((video['duration'] as int?) ?? 0) ~/ 1000 : null,
       fileHash: item['file']?['hashes']?['sha1Hash'] as String?,
       timestamp: timestamp,
     );
