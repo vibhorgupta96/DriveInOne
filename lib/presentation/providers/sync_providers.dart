@@ -27,8 +27,8 @@ final syncStatusProvider = StreamProvider<SyncStatus>((ref) {
 
 final syncNotifierProvider =
     NotifierProvider<SyncNotifier, AsyncValue<SyncResult?>>(() {
-  return SyncNotifier();
-});
+      return SyncNotifier();
+    });
 
 class SyncNotifier extends Notifier<AsyncValue<SyncResult?>> {
   bool _isSyncing = false;
@@ -85,8 +85,9 @@ class SyncNotifier extends Notifier<AsyncValue<SyncResult?>> {
           notificationText: 'Syncing media from cloud...',
         );
       } catch (_) {}
-      final result =
-          await ref.read(syncRepositoryProvider).syncAccount(accountId);
+      final result = await ref
+          .read(syncRepositoryProvider)
+          .syncAccount(accountId);
       await _refreshMediaViews();
       await _runFaceDetection();
       state = AsyncData(result);
@@ -102,12 +103,9 @@ class SyncNotifier extends Notifier<AsyncValue<SyncResult?>> {
   }
 
   Future<void> _runFaceDetection() async {
-    try {
-      final pipeline = await ref.read(aiPipelineProvider.future);
-      await pipeline.processNewMedia();
-    } catch (e) {
-      AppLogger.error('Failed to start face detection', error: e);
-    }
+    // Use the shared notifier so automatic post-sync failures are visible in
+    // the People UI instead of being reduced to a log line.
+    await ref.read(faceScanNotifierProvider.notifier).startScan();
   }
 
   Future<void> _refreshMediaViews() async {

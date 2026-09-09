@@ -32,8 +32,10 @@ class MediaRepositoryImpl implements MediaRepository {
   }
 
   @override
-  Future<List<MediaItemEntity>> getTimeline(
-      {required int limit, required int offset}) async {
+  Future<List<MediaItemEntity>> getTimeline({
+    required int limit,
+    required int offset,
+  }) async {
     final items = await mediaItemsDao.getTimelinePage(limit, offset);
     return items.map(_mapToEntity).toList();
   }
@@ -55,13 +57,15 @@ class MediaRepositoryImpl implements MediaRepository {
   @override
   Stream<List<MediaItemEntity>> watchTimeline() {
     return mediaItemsDao.watchTimeline().map(
-          (items) => items.map(_mapToEntity).toList(),
-        );
+      (items) => items.map(_mapToEntity).toList(),
+    );
   }
 
   @override
   Future<List<MediaItemEntity>> getMediaByDateRange(
-      DateTime start, DateTime end) async {
+    DateTime start,
+    DateTime end,
+  ) async {
     final items = await mediaItemsDao.getMediaByDateRange(start, end);
     return items.map(_mapToEntity).toList();
   }

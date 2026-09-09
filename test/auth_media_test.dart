@@ -12,21 +12,23 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('account-scoped token state', () {
-    test('restoring null optional values clears the previous account state',
-        () {
-      final provider = _TokenProvider();
-      provider.setTokens(
-        accessToken: 'first-access',
-        refreshToken: 'first-refresh',
-        expiry: DateTime.utc(2030),
-      );
+    test(
+      'restoring null optional values clears the previous account state',
+      () {
+        final provider = _TokenProvider();
+        provider.setTokens(
+          accessToken: 'first-access',
+          refreshToken: 'first-refresh',
+          expiry: DateTime.utc(2030),
+        );
 
-      provider.setTokens(accessToken: 'second-access');
+        provider.setTokens(accessToken: 'second-access');
 
-      expect(provider.accessToken, 'second-access');
-      expect(provider.refreshToken, isNull);
-      expect(provider.tokenExpiry, isNull);
-    });
+        expect(provider.accessToken, 'second-access');
+        expect(provider.refreshToken, isNull);
+        expect(provider.tokenExpiry, isNull);
+      },
+    );
   });
 
   group('OAuth configuration', () {

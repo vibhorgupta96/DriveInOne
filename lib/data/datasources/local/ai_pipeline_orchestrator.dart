@@ -13,6 +13,8 @@ import '../../database/daos/accounts_dao.dart';
 import '../../database/daos/media_items_dao.dart';
 import '../../database/tables/media_items_table.dart';
 import '../../datasources/local/secure_storage_source.dart';
+import 'thumbnail_resolver.dart';
+import 'account_operation_gate.dart';
 
 class TokenExpiredException implements Exception {
   final String message;
@@ -45,16 +47,36 @@ class PipelineProgress {
 
   double get fraction => total > 0 ? processed / total : 0;
 
-  static const idle =
-      PipelineProgress(processed: 0, total: 0, isRunning: false);
+  static const idle = PipelineProgress(
+    processed: 0,
+    total: 0,
+    isRunning: false,
+  );
 }
+
+class _AuthHeaders {
+  const _AuthHeaders({required this.headers, required this.accountGeneration});
+
+  final Map<String, String> headers;
+  final int accountGeneration;
+}
+
+typedef VideoFrameExtractor =
+    Future<Uint8List?> Function({
+      required String videoUrl,
+      required int timeMs,
+      required Map<String, String> headers,
+    });
 
 class AIPipelineOrchestrator {
   final FaceRepository faceRepository;
   final MediaItemsDao mediaItemsDao;
   final AccountsDao accountsDao;
   final SecureStorageSource secureStorage;
-  final Dio _dio = Dio();
+  final Dio _dio;
+  final ThumbnailResolver _thumbnailResolver;
+  final Future<String?> Function(String accountId) _accessTokenLoader;
+  final VideoFrameExtractor? _videoFrameExtractor;
 
   Future<void>? _activeRun;
   bool get isRunning => _activeRun != null;
@@ -67,9 +89,16 @@ class AIPipelineOrchestrator {
     required this.mediaItemsDao,
     required this.accountsDao,
     required this.secureStorage,
-  });
+    Dio? dio,
+    ThumbnailResolver? thumbnailResolver,
+    Future<String?> Function(String accountId)? accessTokenLoader,
+    VideoFrameExtractor? videoFrameExtractor,
+  }) : _dio = dio ?? Dio(),
+       _thumbnailResolver = thumbnailResolver ?? ThumbnailResolver(),
+       _accessTokenLoader = accessTokenLoader ?? secureStorage.getAccessToken,
+       _videoFrameExtractor = videoFrameExtractor;
 
-  final Map<String, Map<String, String>> _authHeadersCache = {};
+  final Map<String, _AuthHeaders> _authHeadersCache = {};
   final Set<String> _expiredAccounts = {};
   bool _videoThumbnailPluginAvailable = true;
 
@@ -81,7 +110,19 @@ class AIPipelineOrchestrator {
     final accounts = await accountsDao.getAllAccounts();
     for (final account in accounts) {
       try {
-        final accessToken = await secureStorage.getAccessToken(account.id);
+        // Capture before the asynchronous secure-storage read. An unlink or
+        // relink during that await must not make this old run adopt the new
+        // account generation and credentials.
+        final accountGeneration = AccountOperationGate.generationFor(
+          account.id,
+        );
+        final accessToken = await _accessTokenLoader(account.id);
+        if (!AccountOperationGate.isCurrent(account.id, accountGeneration)) {
+          AppLogger.info(
+            'Face pipeline: account ${account.id} retired while loading token',
+          );
+          continue;
+        }
         if (accessToken == null || accessToken.isEmpty) {
           _expiredAccounts.add(account.id);
           AppLogger.error(
@@ -90,14 +131,17 @@ class AIPipelineOrchestrator {
           continue;
         }
 
-        _authHeadersCache[account.id] = {
-          'Authorization': 'Bearer $accessToken',
-        };
+        _authHeadersCache[account.id] = _AuthHeaders(
+          headers: {'Authorization': 'Bearer $accessToken'},
+          accountGeneration: accountGeneration,
+        );
         AppLogger.info('Face pipeline: using stored token for ${account.id}');
       } catch (e) {
         _expiredAccounts.add(account.id);
-        AppLogger.error('Face pipeline: failed to load token for ${account.id}',
-            error: e);
+        AppLogger.error(
+          'Face pipeline: failed to load token for ${account.id}',
+          error: e,
+        );
       }
     }
 
@@ -128,24 +172,29 @@ class AIPipelineOrchestrator {
     try {
       final totalMedia = await mediaItemsDao.getMediaCount();
       final alreadyProcessed = await mediaItemsDao.getProcessedFacesCount();
-      final allUnprocessed =
-          await mediaItemsDao.getMediaItemsWithoutFaces(10000);
+      final allUnprocessed = await mediaItemsDao.getMediaItemsWithoutFaces(
+        10000,
+      );
       final total = totalMedia - alreadyProcessed;
       AppLogger.info(
-          'Face pipeline: $total unprocessed out of $totalMedia total media items');
+        'Face pipeline: $total unprocessed out of $totalMedia total media items',
+      );
 
       if (total > 0) {
         final withThumb = allUnprocessed
             .where((i) => i.thumbnailUrl != null && i.thumbnailUrl!.isNotEmpty)
             .length;
         final constructable = allUnprocessed
-            .where((i) =>
-                (i.thumbnailUrl == null || i.thumbnailUrl!.isEmpty) &&
-                _constructThumbnailUrl(i) != null)
+            .where(
+              (i) =>
+                  (i.thumbnailUrl == null || i.thumbnailUrl!.isEmpty) &&
+                  _constructThumbnailUrl(i) != null,
+            )
             .length;
         AppLogger.info(
-            'Face pipeline: $withThumb have thumbnailUrl, $constructable can construct URL, '
-            '${total - withThumb - constructable} have no thumbnail source');
+          'Face pipeline: $withThumb have thumbnailUrl, $constructable can construct URL, '
+          '${total - withThumb - constructable} have no thumbnail source',
+        );
         await _prepareAuthHeaders();
 
         var completed = 0;
@@ -153,8 +202,9 @@ class AIPipelineOrchestrator {
         final failures = <String, Object>{};
 
         AppLogger.info('Face pipeline: starting, $total items to process');
-        _progressController
-            .add(PipelineProgress(processed: 0, total: total, isRunning: true));
+        _progressController.add(
+          PipelineProgress(processed: 0, total: total, isRunning: true),
+        );
 
         while (true) {
           // Previously failed rows remain unprocessed at the head of this
@@ -165,8 +215,9 @@ class AIPipelineOrchestrator {
           );
           if (items.isEmpty) break;
 
-          final toProcess =
-              items.where((item) => !attemptedIds.contains(item.id)).toList();
+          final toProcess = items
+              .where((item) => !attemptedIds.contains(item.id))
+              .toList();
           if (toProcess.isEmpty) break;
 
           for (final item in toProcess) {
@@ -175,23 +226,59 @@ class AIPipelineOrchestrator {
               failures[item.id] = TokenExpiredException(
                 'No usable token for account ${item.accountId}',
               );
-              _progressController.add(PipelineProgress(
-                processed: attemptedIds.length,
-                total: total,
-                isRunning: true,
-              ));
+              _progressController.add(
+                PipelineProgress(
+                  processed: attemptedIds.length,
+                  total: total,
+                  isRunning: true,
+                ),
+              );
+              continue;
+            }
+
+            final auth = _authHeadersCache[item.accountId];
+            if (auth == null ||
+                !AccountOperationGate.isCurrent(
+                  item.accountId,
+                  auth.accountGeneration,
+                )) {
+              // This run was prepared for a retired account generation. Do
+              // not borrow the generation of a newly linked account.
+              _progressController.add(
+                PipelineProgress(
+                  processed: attemptedIds.length,
+                  total: total,
+                  isRunning: true,
+                ),
+              );
               continue;
             }
 
             try {
-              final thumbnailBytes = await _downloadThumbnail(item);
-              if (thumbnailBytes == null) {
+              // Capture before network work; sync/unlink may replace this row
+              // while a provider thumbnail or a video frame is downloading.
+              final expectedSource = FaceProcessingContext(
+                accountId: item.accountId,
+                fileHash: item.fileHash,
+                syncedAt: item.syncedAt,
+                accountGeneration: auth.accountGeneration,
+              );
+              final frames = await _downloadFrames(
+                item,
+                accountGeneration: expectedSource.accountGeneration,
+              );
+              if (frames.isEmpty) {
                 // This is reserved for a permanent, provider-confirmed lack of
                 // any thumbnail source. Authentication and transport failures
                 // throw and therefore remain retryable.
-                await mediaItemsDao.markFacesProcessed(item.id);
+                await _markFacesProcessedIfCurrent(item.id, expectedSource);
               } else {
-                await faceRepository.processMediaItem(item.id, thumbnailBytes);
+                await faceRepository.processMediaItem(
+                  item.id,
+                  frames.first,
+                  additionalFrames: frames.skip(1).toList(growable: false),
+                  expectedSource: expectedSource,
+                );
               }
               completed++;
             } on TokenExpiredException catch (e) {
@@ -202,15 +289,19 @@ class AIPipelineOrchestrator {
                 error: e,
               );
             } catch (e) {
-              AppLogger.error('Failed to process media item ${item.id}',
-                  error: e);
+              AppLogger.error(
+                'Failed to process media item ${item.id}',
+                error: e,
+              );
               failures[item.id] = e;
             }
-            _progressController.add(PipelineProgress(
-              processed: attemptedIds.length,
-              total: total,
-              isRunning: true,
-            ));
+            _progressController.add(
+              PipelineProgress(
+                processed: attemptedIds.length,
+                total: total,
+                isRunning: true,
+              ),
+            );
           }
         }
 
@@ -220,11 +311,15 @@ class AIPipelineOrchestrator {
         await faceRepository.runClustering();
 
         if (_expiredAccounts.isNotEmpty) {
-          AppLogger.info('Face pipeline: tokens expired for accounts: '
-              '${_expiredAccounts.join(', ')}. Sync those accounts to process remaining items.');
+          AppLogger.info(
+            'Face pipeline: tokens expired for accounts: '
+            '${_expiredAccounts.join(', ')}. Sync those accounts to process remaining items.',
+          );
         }
-        AppLogger.info('Face pipeline: complete, processed $completed items, '
-            '${failures.length} skipped due to errors');
+        AppLogger.info(
+          'Face pipeline: complete, processed $completed items, '
+          '${failures.length} skipped due to errors',
+        );
 
         if (_expiredAccounts.isNotEmpty) {
           throw TokenExpiredException(
@@ -251,31 +346,45 @@ class AIPipelineOrchestrator {
 
   /// Constructs a thumbnail URL for items that were synced before providers
   /// started persisting stable thumbnail URL patterns.
-  String? _constructThumbnailUrl(MediaItem item) {
-    if (item.accountId.startsWith('dropbox|') &&
-        item.remotePath != null &&
-        item.remotePath!.isNotEmpty) {
-      return 'dropbox://thumbnail${item.remotePath}';
-    }
-    if (item.accountId.startsWith('onedrive|')) {
-      return 'https://graph.microsoft.com/v1.0/me/drive/items/${item.remoteId}/thumbnails/0/large/content';
-    }
-    if (item.accountId.startsWith('google|')) {
-      return 'gdrive://thumb/${item.remoteId}';
-    }
-    return null;
-  }
+  String? _constructThumbnailUrl(MediaItem item) =>
+      ThumbnailResolver.constructThumbnailUrl(
+        accountId: item.accountId,
+        remoteId: item.remoteId,
+        remotePath: item.remotePath,
+      );
 
-  /// Returns null only when no thumbnail can be obtained (permanent condition).
-  /// Throws on transient download errors so the caller can skip without
-  /// marking the item as processed.
-  Future<Uint8List?> _downloadThumbnail(MediaItem item) async {
-    final headers = _authHeadersCache[item.accountId];
-    if (headers == null) {
+  /// Prefers all distinct sampled video frames. A provider poster is only a
+  /// fallback when the video plugin is unavailable or produces no frame.
+  Future<List<Uint8List>> _downloadFrames(
+    MediaItem item, {
+    required int accountGeneration,
+  }) async {
+    final auth = _authHeadersCache[item.accountId];
+    if (auth == null || auth.accountGeneration != accountGeneration) {
       _expiredAccounts.add(item.accountId);
       throw TokenExpiredException(
         'No stored access token for account ${item.accountId}',
       );
+    }
+    if (!AccountOperationGate.isCurrent(item.accountId, accountGeneration)) {
+      return const [];
+    }
+    final headers = auth.headers;
+    Object? extractionError;
+    StackTrace? extractionStackTrace;
+
+    Future<List<Uint8List>> extractFrames() async {
+      try {
+        return await _extractVideoFrames(
+          item,
+          headers,
+          accountGeneration: accountGeneration,
+        );
+      } catch (error, stackTrace) {
+        extractionError ??= error;
+        extractionStackTrace ??= stackTrace;
+        return const [];
+      }
     }
 
     var thumbnailUrl = item.thumbnailUrl;
@@ -283,11 +392,21 @@ class AIPipelineOrchestrator {
       // For videos, fall back to extracting a frame from stream URL when
       // providers don't expose thumbnails in metadata.
       if (item.mediaType == MediaTypeEnum.video) {
-        final frame = await _extractVideoFrame(item, headers);
-        if (frame != null) return frame;
+        final frames = await extractFrames();
+        if (frames.isNotEmpty) return frames;
       }
       thumbnailUrl = _constructThumbnailUrl(item);
-      if (thumbnailUrl == null) return null;
+      if (thumbnailUrl == null) {
+        if (extractionError != null) {
+          Error.throwWithStackTrace(extractionError!, extractionStackTrace!);
+        }
+        return const [];
+      }
+    }
+
+    if (item.mediaType == MediaTypeEnum.video) {
+      final frames = await extractFrames();
+      if (frames.isNotEmpty) return frames;
     }
 
     // Convert stale googleusercontent.com URLs to the stable gdrive:// pattern
@@ -298,31 +417,28 @@ class AIPipelineOrchestrator {
     }
 
     try {
-      if (thumbnailUrl.startsWith('dropbox://thumbnail')) {
-        return _downloadDropboxThumbnail(thumbnailUrl, headers);
-      }
-
-      if (thumbnailUrl.startsWith('gdrive://thumb/')) {
-        final bytes = await _downloadGDriveThumbnail(thumbnailUrl, headers);
-        if (bytes != null) return bytes;
-        if (item.mediaType == MediaTypeEnum.video) {
-          return _extractVideoFrame(item, headers);
-        }
-        return null;
-      }
-
-      final response = await _dio.get(
+      final bytes = await _thumbnailResolver.resolve(
         thumbnailUrl,
-        options: Options(
-          headers: headers,
-          responseType: ResponseType.bytes,
-        ),
+        headers,
+        cacheKey:
+            '${item.accountId}|${item.remoteId}|${item.fileHash ?? item.syncedAt.microsecondsSinceEpoch}',
+        accountId: item.accountId,
+        accountGeneration: accountGeneration,
       );
-      return Uint8List.fromList(response.data);
+      if (bytes != null) return [bytes];
+      if (item.mediaType == MediaTypeEnum.video) {
+        final frames = await extractFrames();
+        if (frames.isNotEmpty) return frames;
+      }
+      if (extractionError != null) {
+        Error.throwWithStackTrace(extractionError!, extractionStackTrace!);
+      }
+      return const [];
     } on DioException catch (e) {
       if (e.response?.statusCode == 401) {
         AppLogger.error(
-            'Face pipeline: 401 for account ${item.accountId} — marking expired');
+          'Face pipeline: 401 for account ${item.accountId} — marking expired',
+        );
         _expiredAccounts.add(item.accountId);
         throw TokenExpiredException(
           'Access token expired for account ${item.accountId}',
@@ -330,91 +446,93 @@ class AIPipelineOrchestrator {
       } else if (item.mediaType == MediaTypeEnum.video) {
         // If provider thumbnail endpoint fails for videos, try extracting
         // from the original video stream before giving up.
-        final frame = await _extractVideoFrame(item, headers);
-        if (frame != null) return frame;
-        AppLogger.error('Failed to get video thumbnail/frame for ${item.id}',
-            error: e);
+        final frames = await extractFrames();
+        if (frames.isNotEmpty) return frames;
+        if (extractionError != null) {
+          Error.throwWithStackTrace(extractionError!, extractionStackTrace!);
+        }
+        AppLogger.error(
+          'Failed to get video thumbnail/frame for ${item.id}',
+          error: e,
+        );
       } else {
-        AppLogger.error('Failed to download thumbnail for ${item.id}',
-            error: e);
+        AppLogger.error(
+          'Failed to download thumbnail for ${item.id}',
+          error: e,
+        );
       }
       rethrow;
     }
   }
 
-  Future<Uint8List> _downloadDropboxThumbnail(
-      String url, Map<String, String> headers) async {
-    final path = url.replaceFirst('dropbox://thumbnail', '');
-    final apiArg = jsonEncode({
-      'resource': {'.tag': 'path', 'path': path},
-      'format': 'jpeg',
-      'size': 'w640h480',
-    });
-    final response = await _dio.post(
-      'https://content.dropboxapi.com/2/files/get_thumbnail_v2',
-      options: Options(
-        headers: {...headers, 'Dropbox-API-Arg': apiArg},
-        responseType: ResponseType.bytes,
-      ),
+  Future<void> _markFacesProcessedIfCurrent(
+    String mediaItemId,
+    FaceProcessingContext expectedSource,
+  ) async {
+    await AccountOperationGate.runIfCurrent(
+      expectedSource.accountId,
+      expectedSource.accountGeneration,
+      () => mediaItemsDao.transaction(() async {
+        final current = await mediaItemsDao.getMediaItemById(mediaItemId);
+        if (current == null ||
+            current.isDeleted ||
+            current.accountId != expectedSource.accountId ||
+            current.fileHash != expectedSource.fileHash ||
+            current.syncedAt != expectedSource.syncedAt) {
+          return;
+        }
+        await mediaItemsDao.markFacesProcessed(mediaItemId);
+      }),
     );
-    return Uint8List.fromList(response.data);
-  }
-
-  /// Fetches a fresh thumbnailLink from the Google Drive API, then downloads
-  /// the actual thumbnail bytes. This avoids stale/expired thumbnail URLs.
-  Future<Uint8List?> _downloadGDriveThumbnail(
-      String url, Map<String, String> headers) async {
-    final fileId = url.replaceFirst('gdrive://thumb/', '');
-
-    final metaResponse = await _dio.get(
-      'https://www.googleapis.com/drive/v3/files/$fileId',
-      queryParameters: {'fields': 'thumbnailLink'},
-      options: Options(headers: headers),
-    );
-
-    final freshLink = metaResponse.data['thumbnailLink'] as String?;
-    if (freshLink == null || freshLink.isEmpty) return null;
-
-    // Request larger thumbnail (default is ~220px)
-    final upgradedLink = freshLink.replaceFirst(RegExp(r'=s\d+'), '=s800');
-
-    final thumbResponse = await _dio.get(
-      upgradedLink,
-      options: Options(responseType: ResponseType.bytes),
-    );
-    return Uint8List.fromList(thumbResponse.data);
-  }
-
-  Future<Uint8List?> _extractVideoFrame(
-      MediaItem item, Map<String, String> headers) async {
-    final frames = await _extractVideoFrames(item, headers);
-    return frames.isNotEmpty ? frames.first : null;
   }
 
   Future<List<Uint8List>> _extractVideoFrames(
-      MediaItem item, Map<String, String> headers) async {
-    if (!_videoThumbnailPluginAvailable) return const [];
+    MediaItem item,
+    Map<String, String> headers, {
+    required int accountGeneration,
+  }) async {
+    if (!_videoThumbnailPluginAvailable ||
+        !AccountOperationGate.isCurrent(item.accountId, accountGeneration)) {
+      return const [];
+    }
 
     try {
-      final videoUrl = await _resolveVideoStreamUrl(item, headers);
+      final videoUrl = await _resolveVideoStreamUrl(
+        item,
+        headers,
+        accountGeneration: accountGeneration,
+      );
       if (videoUrl == null || videoUrl.isEmpty) return const [];
 
       final timestamps = _videoSampleTimestampsMs(item.durationSeconds);
       final frames = <Uint8List>[];
-      final seenHashes = <int>{};
+      // There are only a few samples.  Use their full bytes rather than a
+      // sparse hash, which can collide for visually distinct video frames.
+      final seenFrames = <String>{};
 
       for (final ts in timestamps) {
-        final frame = await VideoThumbnail.thumbnailData(
-          video: videoUrl,
-          imageFormat: ImageFormat.JPEG,
-          maxWidth: 720,
-          quality: 75,
-          timeMs: ts,
-          headers: headers,
-        );
+        final frame = _videoFrameExtractor == null
+            ? await VideoThumbnail.thumbnailData(
+                video: videoUrl,
+                imageFormat: ImageFormat.JPEG,
+                maxWidth: 720,
+                quality: 75,
+                timeMs: ts,
+                headers: headers,
+              )
+            : await _videoFrameExtractor(
+                videoUrl: videoUrl,
+                timeMs: ts,
+                headers: headers,
+              );
+        if (!AccountOperationGate.isCurrent(
+          item.accountId,
+          accountGeneration,
+        )) {
+          return const [];
+        }
         if (frame == null || frame.isEmpty) continue;
-        final frameHash = _quickBytesHash(frame);
-        if (seenHashes.add(frameHash)) {
+        if (seenFrames.add(base64Encode(frame))) {
           frames.add(frame);
         }
       }
@@ -441,30 +559,26 @@ class AIPipelineOrchestrator {
     final t2 = (totalMs * 0.35).round();
     final t3 = (totalMs * 0.60).round();
     final t4 = (totalMs * 0.85).round();
-    final points = <int>{t1, t2, t3, t4}
-        .where((t) => t > 0 && t < totalMs)
-        .toList()
-      ..sort();
+    final points = <int>{
+      t1,
+      t2,
+      t3,
+      t4,
+    }.where((t) => t > 0 && t < totalMs).toList()..sort();
     if (points.isEmpty) return const [500, 1500, 3000];
     return points;
   }
 
-  int _quickBytesHash(Uint8List bytes) {
-    int hash = 17;
-    for (int i = 0; i < bytes.length; i += 97) {
-      hash = 37 * hash + bytes[i];
-    }
-    hash = 37 * hash + bytes.length;
-    return hash;
-  }
-
   Future<String?> _resolveVideoStreamUrl(
-      MediaItem item, Map<String, String> headers) async {
-    // Prefer a direct URL if already available.
-    if (item.fullSizeUrl != null && item.fullSizeUrl!.isNotEmpty) {
-      return item.fullSizeUrl;
+    MediaItem item,
+    Map<String, String> headers, {
+    required int accountGeneration,
+  }) async {
+    if (!AccountOperationGate.isCurrent(item.accountId, accountGeneration)) {
+      return null;
     }
-
+    // Provider APIs return a current stream URL. Persisted OneDrive download
+    // URLs are short-lived and must not take precedence over a fresh lookup.
     if (item.accountId.startsWith('google|')) {
       return '${ProviderConstants.googleDriveBaseUrl}/files/${item.remoteId}?alt=media';
     }
@@ -475,6 +589,9 @@ class AIPipelineOrchestrator {
         queryParameters: const {'select': '@microsoft.graph.downloadUrl'},
         options: Options(headers: headers),
       );
+      if (!AccountOperationGate.isCurrent(item.accountId, accountGeneration)) {
+        return null;
+      }
       return response.data['@microsoft.graph.downloadUrl'] as String?;
     }
 
@@ -483,15 +600,17 @@ class AIPipelineOrchestrator {
       if (path == null || path.isEmpty) return null;
       final response = await _dio.post(
         '${ProviderConstants.dropboxApiBaseUrl}/files/get_temporary_link',
-        options: Options(headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {...headers, 'Content-Type': 'application/json'},
+        ),
         data: jsonEncode({'path': path}),
       );
+      if (!AccountOperationGate.isCurrent(item.accountId, accountGeneration)) {
+        return null;
+      }
       return response.data['link'] as String?;
     }
 
-    return null;
+    return item.fullSizeUrl?.isNotEmpty == true ? item.fullSizeUrl : null;
   }
 }

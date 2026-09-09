@@ -6,11 +6,7 @@ class ProviderIcon extends StatelessWidget {
   final ProviderType providerType;
   final double size;
 
-  const ProviderIcon({
-    super.key,
-    required this.providerType,
-    this.size = 24,
-  });
+  const ProviderIcon({super.key, required this.providerType, this.size = 24});
 
   @override
   Widget build(BuildContext context) {
@@ -22,11 +18,7 @@ class ProviderIcon extends StatelessWidget {
         borderRadius: BorderRadius.circular(size / 4),
       ),
       child: Center(
-        child: Icon(
-          _getIcon(),
-          size: size * 0.6,
-          color: Colors.white,
-        ),
+        child: Icon(_getIcon(), size: size * 0.6, color: Colors.white),
       ),
     );
   }

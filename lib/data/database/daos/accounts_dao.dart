@@ -22,18 +22,20 @@ class AccountsDao extends DatabaseAccessor<AppDatabase>
   Future<void> insertAccount(AccountsCompanion account) =>
       into(accounts).insert(account, mode: InsertMode.insertOrReplace);
 
-  Future<void> updateAccount(AccountsCompanion account) =>
-      (update(accounts)..where((a) => a.id.equals(account.id.value)))
-          .write(account);
+  Future<void> updateAccount(AccountsCompanion account) => (update(
+    accounts,
+  )..where((a) => a.id.equals(account.id.value))).write(account);
 
   Future<void> deleteAccount(String id) =>
       (delete(accounts)..where((a) => a.id.equals(id))).go();
 
   Future<void> updateSyncToken(String id, String? token) =>
-      (update(accounts)..where((a) => a.id.equals(id)))
-          .write(AccountsCompanion(syncToken: Value(token)));
+      (update(accounts)..where((a) => a.id.equals(id))).write(
+        AccountsCompanion(syncToken: Value(token)),
+      );
 
   Future<void> updateTokenExpiry(String id, DateTime? expiry) =>
-      (update(accounts)..where((a) => a.id.equals(id)))
-          .write(AccountsCompanion(tokenExpiry: Value(expiry)));
+      (update(accounts)..where((a) => a.id.equals(id))).write(
+        AccountsCompanion(tokenExpiry: Value(expiry)),
+      );
 }

@@ -65,18 +65,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                 value: event == null
                     ? null
                     : event.cumulativeBytesLoaded /
-                        (event.expectedTotalBytes ?? 1),
+                          (event.expectedTotalBytes ?? 1),
                 color: Colors.white,
               ),
             );
           },
           errorBuilder: (context, error, stackTrace) {
             return const Center(
-              child: Icon(
-                Icons.broken_image,
-                color: Colors.white54,
-                size: 64,
-              ),
+              child: Icon(Icons.broken_image, color: Colors.white54, size: 64),
             );
           },
         );

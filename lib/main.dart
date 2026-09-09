@@ -22,8 +22,11 @@ void main() async {
       };
 
       PlatformDispatcher.instance.onError = (error, stack) {
-        AppLogger.error('Unhandled platform error',
-            error: error, stackTrace: stack);
+        AppLogger.error(
+          'Unhandled platform error',
+          error: error,
+          stackTrace: stack,
+        );
         return true;
       };
 
@@ -31,9 +34,7 @@ void main() async {
 
       runApp(
         ProviderScope(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(database),
-          ],
+          overrides: [appDatabaseProvider.overrideWithValue(database)],
           child: const DriveInOneApp(),
         ),
       );

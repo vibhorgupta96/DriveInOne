@@ -29,7 +29,8 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
       ..where((m) {
         var predicate = m.isDeleted.equals(false);
         if (beforeTimestamp != null && beforeId != null) {
-          predicate = predicate &
+          predicate =
+              predicate &
               (m.timestamp.isSmallerThanValue(beforeTimestamp) |
                   (m.timestamp.equals(beforeTimestamp) &
                       m.id.isSmallerThanValue(beforeId)));
@@ -44,27 +45,31 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
     return query.get();
   }
 
-  Stream<List<MediaItem>> watchTimeline() => (select(mediaItems)
-        ..where((m) => m.isDeleted.equals(false))
-        ..orderBy([
-          (m) => OrderingTerm.desc(m.timestamp),
-          (m) => OrderingTerm.desc(m.id),
-        ]))
-      .watch();
+  Stream<List<MediaItem>> watchTimeline() =>
+      (select(mediaItems)
+            ..where((m) => m.isDeleted.equals(false))
+            ..orderBy([
+              (m) => OrderingTerm.desc(m.timestamp),
+              (m) => OrderingTerm.desc(m.id),
+            ]))
+          .watch();
 
   Future<List<MediaItem>> getMediaByDateRange(DateTime start, DateTime end) =>
       (select(mediaItems)
-            ..where((m) =>
-                m.isDeleted.equals(false) &
-                m.timestamp.isBiggerOrEqualValue(start) &
-                m.timestamp.isSmallerOrEqualValue(end))
+            ..where(
+              (m) =>
+                  m.isDeleted.equals(false) &
+                  m.timestamp.isBiggerOrEqualValue(start) &
+                  m.timestamp.isSmallerOrEqualValue(end),
+            )
             ..orderBy([(m) => OrderingTerm.desc(m.timestamp)]))
           .get();
 
   Future<List<MediaItem>> getMediaByAccount(String accountId) =>
       (select(mediaItems)
-            ..where((m) =>
-                m.isDeleted.equals(false) & m.accountId.equals(accountId))
+            ..where(
+              (m) => m.isDeleted.equals(false) & m.accountId.equals(accountId),
+            )
             ..orderBy([(m) => OrderingTerm.desc(m.timestamp)]))
           .get();
 
@@ -81,21 +86,25 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
         .where((provider) => provider.name.contains(term.toLowerCase()))
         .map((provider) => provider.index)
         .toList();
-    var accountPredicate = accountsTable.id.contains(term) |
+    var accountPredicate =
+        accountsTable.id.contains(term) |
         accountsTable.email.contains(term) |
         accountsTable.displayName.contains(term);
     if (providerIndexes.isNotEmpty) {
       accountPredicate =
           accountPredicate | accountsTable.providerType.isIn(providerIndexes);
     }
-    final matchingAccounts =
-        await (select(accountsTable)..where((_) => accountPredicate)).get();
+    final matchingAccounts = await (select(
+      accountsTable,
+    )..where((_) => accountPredicate)).get();
 
-    final matchingAccountIds =
-        matchingAccounts.map((account) => account.id).toList();
+    final matchingAccountIds = matchingAccounts
+        .map((account) => account.id)
+        .toList();
     return (select(mediaItems)
           ..where((m) {
-            var metadataMatches = m.fileName.contains(term) |
+            var metadataMatches =
+                m.fileName.contains(term) |
                 m.mimeType.contains(term) |
                 m.remotePath.contains(term) |
                 m.accountId.contains(term);
@@ -129,11 +138,13 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
       throw ArgumentError('Media upserts require id, accountId, and remoteId');
     }
 
-    final existing = await (select(mediaItems)
-          ..where((m) =>
-              m.accountId.equals(item.accountId.value) &
-              m.remoteId.equals(item.remoteId.value)))
-        .getSingleOrNull();
+    final existing =
+        await (select(mediaItems)..where(
+              (m) =>
+                  m.accountId.equals(item.accountId.value) &
+                  m.remoteId.equals(item.remoteId.value),
+            ))
+            .getSingleOrNull();
 
     if (existing == null) {
       await into(mediaItems).insert(item);
@@ -149,13 +160,15 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
       facesProcessed: Value(facesProcessed),
       syncedAt: Value(DateTime.now()),
     );
-    await (update(mediaItems)..where((m) => m.id.equals(existing.id)))
-        .write(updateItem);
+    await (update(
+      mediaItems,
+    )..where((m) => m.id.equals(existing.id))).write(updateItem);
   }
 
   bool _contentChanged(MediaItem existing, MediaItemsCompanion incoming) {
-    final incomingHash =
-        incoming.fileHash.present ? incoming.fileHash.value : null;
+    final incomingHash = incoming.fileHash.present
+        ? incoming.fileHash.value
+        : null;
     final existingHash = existing.fileHash;
     if (existingHash != null &&
         existingHash.isNotEmpty &&
@@ -199,41 +212,72 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
     return false;
   }
 
-  Future<void> markDeleted(
-          String accountId, String remoteId) =>
-      (update(mediaItems)
-            ..where((m) =>
-                m.accountId.equals(accountId) & m.remoteId.equals(remoteId)))
+  Future<void> markDeleted(String accountId, String remoteId) =>
+      (update(mediaItems)..where(
+            (m) => m.accountId.equals(accountId) & m.remoteId.equals(remoteId),
+          ))
           .write(const MediaItemsCompanion(isDeleted: Value(true)));
 
-  Future<void> markDeletedByRemoteKey(String accountId, String remoteKey) {
+  Future<int> markDeletedByRemoteKey(String accountId, String remoteKey) {
     final isPathKey = remoteKey.startsWith('path:');
     final value = isPathKey ? remoteKey.substring('path:'.length) : remoteKey;
     final normalizedPath = value.toLowerCase();
-    return (update(mediaItems)
-          ..where((m) {
-            final accountMatches = m.accountId.equals(accountId);
-            if (isPathKey) {
-              return accountMatches & m.remotePath.equals(normalizedPath);
-            }
+    return (update(mediaItems)..where((m) {
+          final accountMatches =
+              m.accountId.equals(accountId) & m.isDeleted.equals(false);
+          if (isPathKey) {
+            // Dropbox folder tombstones cover the folder and every true
+            // path descendant, but not a sibling such as /album-archive.
+            final descendantPrefix = normalizedPath.endsWith('/')
+                ? normalizedPath
+                : '$normalizedPath/';
             return accountMatches &
-                (m.remoteId.equals(value) |
-                    m.remotePath.equals(normalizedPath));
-          }))
+                (m.remotePath.equals(normalizedPath) |
+                    m.remotePath.like(
+                      '${_escapeLike(descendantPrefix)}%',
+                      escapeChar: '\\',
+                    ));
+          }
+          return accountMatches &
+              (m.remoteId.equals(value) | m.remotePath.equals(normalizedPath));
+        }))
         .write(const MediaItemsCompanion(isDeleted: Value(true)));
   }
 
-  Future<void> batchMarkDeleted(String accountId, List<String> remoteIds) {
+  Future<int> batchMarkDeleted(String accountId, List<String> remoteIds) {
     return transaction(() async {
       final deletedMediaIds = <String>{};
+      var deletedCount = 0;
       for (final remoteId in remoteIds) {
         deletedMediaIds.addAll(
           await _mediaIdsForRemoteKey(accountId, remoteId),
         );
-        await markDeletedByRemoteKey(accountId, remoteId);
+        deletedCount += await markDeletedByRemoteKey(accountId, remoteId);
       }
       await attachedDatabase.facesDao.deleteFacesForMediaIds(deletedMediaIds);
+      return deletedCount;
     });
+  }
+
+  /// Reconciles a successful provider root enumeration. This is intentionally
+  /// separate from failed/partial deltas: callers invoke it only when the
+  /// provider confirms the entire snapshot was fetched.
+  Future<int> reconcileFullSnapshot(
+    String accountId,
+    Iterable<String> presentRemoteIds,
+  ) async {
+    final present = presentRemoteIds.toSet();
+    final current =
+        await (select(mediaItems)..where(
+              (m) => m.accountId.equals(accountId) & m.isDeleted.equals(false),
+            ))
+            .get();
+    final missing = current
+        .where((media) => !present.contains(media.remoteId))
+        .map((media) => media.remoteId)
+        .toList();
+    if (missing.isEmpty) return 0;
+    return batchMarkDeleted(accountId, missing);
   }
 
   Future<List<String>> _mediaIdsForRemoteKey(
@@ -248,7 +292,15 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
       ..where(() {
         final accountMatches = mediaItems.accountId.equals(accountId);
         if (isPathKey) {
-          return accountMatches & mediaItems.remotePath.equals(normalizedPath);
+          final descendantPrefix = normalizedPath.endsWith('/')
+              ? normalizedPath
+              : '$normalizedPath/';
+          return accountMatches &
+              (mediaItems.remotePath.equals(normalizedPath) |
+                  mediaItems.remotePath.like(
+                    '${_escapeLike(descendantPrefix)}%',
+                    escapeChar: '\\',
+                  ));
         }
         return accountMatches &
             (mediaItems.remoteId.equals(value) |
@@ -265,14 +317,16 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
 
   Future<List<MediaItem>> getMediaItemsWithoutFaces(int limit) =>
       (select(mediaItems)
-            ..where((m) =>
-                m.isDeleted.equals(false) & m.facesProcessed.equals(false))
+            ..where(
+              (m) => m.isDeleted.equals(false) & m.facesProcessed.equals(false),
+            )
             ..limit(limit))
           .get();
 
   Future<void> markFacesProcessed(String id) =>
-      (update(mediaItems)..where((m) => m.id.equals(id)))
-          .write(const MediaItemsCompanion(facesProcessed: Value(true)));
+      (update(mediaItems)..where((m) => m.id.equals(id))).write(
+        const MediaItemsCompanion(facesProcessed: Value(true)),
+      );
 
   Future<int> getMediaCount() async {
     final count = countAll();
@@ -285,23 +339,25 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
 
   Future<List<MediaItem>> getMediaItemsByIds(List<String> ids) {
     if (ids.isEmpty) return Future.value(const []);
-    return (select(mediaItems)
-          ..where((m) => m.isDeleted.equals(false) & m.id.isIn(ids)))
-        .get();
+    return (select(
+      mediaItems,
+    )..where((m) => m.isDeleted.equals(false) & m.id.isIn(ids))).get();
   }
 
   Future<int> getProcessedFacesCount() async {
     final count = countAll();
     final query = selectOnly(mediaItems)
-      ..where(mediaItems.isDeleted.equals(false) &
-          mediaItems.facesProcessed.equals(true))
+      ..where(
+        mediaItems.isDeleted.equals(false) &
+            mediaItems.facesProcessed.equals(true),
+      )
       ..addColumns([count]);
     final result = await query.getSingle();
     return result.read(count) ?? 0;
   }
 
   Future<Map<String, ({int photos, int videos})>>
-      getMediaStatsByAccount() async {
+  getMediaStatsByAccount() async {
     final results = await customSelect(
       'SELECT account_id, media_type, COUNT(*) as cnt '
       'FROM media_items '
@@ -325,6 +381,12 @@ class MediaItemsDao extends DatabaseAccessor<AppDatabase>
   }
 
   Future<void> resetAllFacesProcessed() =>
-      (update(mediaItems)..where((m) => m.facesProcessed.equals(true)))
-          .write(const MediaItemsCompanion(facesProcessed: Value(false)));
+      (update(mediaItems)..where((m) => m.facesProcessed.equals(true))).write(
+        const MediaItemsCompanion(facesProcessed: Value(false)),
+      );
+
+  static String _escapeLike(String value) => value
+      .replaceAll('\\', '\\\\')
+      .replaceAll('%', '\\%')
+      .replaceAll('_', '\\_');
 }

@@ -25,8 +25,9 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
 
     // Check if any accounts are linked
     try {
-      final accounts =
-          await ref.read(authRepositoryProvider).getLinkedAccounts();
+      final accounts = await ref
+          .read(authRepositoryProvider)
+          .getLinkedAccounts();
       if (!mounted) return;
 
       if (accounts.isEmpty) {
@@ -54,16 +55,16 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
             const SizedBox(height: 24),
             Text(
               'DriveInOne',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
               'All your cloud photos, one gallery',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
+                color: Theme.of(context).colorScheme.outline,
+              ),
             ),
             const SizedBox(height: 48),
             const CircularProgressIndicator(),

@@ -112,7 +112,8 @@ class FaceDetectionService {
       final msg = e.toString().toLowerCase();
       if (msg.contains('precondition')) {
         AppLogger.warning(
-            'Face detector precondition failed (bytes), recreating detector and retrying once');
+          'Face detector precondition failed (bytes), recreating detector and retrying once',
+        );
         try {
           await _reinitializeDetector();
           final inputImage = InputImage.fromBytes(
@@ -149,15 +150,18 @@ class FaceDetectionService {
       final msg = e.toString().toLowerCase();
       if (msg.contains('precondition')) {
         AppLogger.warning(
-            'Face detector precondition failed (file), recreating detector and retrying once');
+          'Face detector precondition failed (file), recreating detector and retrying once',
+        );
         try {
           await _reinitializeDetector();
           final inputImage = InputImage.fromFilePath(filePath);
           final faces = await _faceDetector.processImage(inputImage);
           return faces.map(_toDetectedFace).toList();
         } catch (retryError) {
-          AppLogger.error('Face detection from file retry failed',
-              error: retryError);
+          AppLogger.error(
+            'Face detection from file retry failed',
+            error: retryError,
+          );
           throw FaceDetectionException(
             'Face detection from file retry failed',
             retryError,

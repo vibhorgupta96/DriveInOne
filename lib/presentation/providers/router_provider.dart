@@ -71,9 +71,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/viewer/:mediaId',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) => MediaViewerScreen(
-          mediaId: state.pathParameters['mediaId']!,
-        ),
+        builder: (context, state) =>
+            MediaViewerScreen(mediaId: state.pathParameters['mediaId']!),
       ),
     ],
   );

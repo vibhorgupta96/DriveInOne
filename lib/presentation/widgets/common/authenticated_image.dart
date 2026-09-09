@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/utils/logger.dart';
+import '../../../data/datasources/local/account_operation_gate.dart';
 import '../../../data/datasources/local/thumbnail_resolver.dart';
 import '../../providers/auth_providers.dart';
 
@@ -74,7 +75,7 @@ class _AuthenticatedImageState extends ConsumerState<AuthenticatedImage> {
           height: widget.height,
           fit: widget.fit,
           gaplessPlayback: true,
-          errorBuilder: (_, __, ___) => _buildPlaceholder(context),
+          errorBuilder: (_, _, _) => _buildPlaceholder(context),
         );
       },
     );
@@ -85,22 +86,44 @@ class _AuthenticatedImageState extends ConsumerState<AuthenticatedImage> {
     if (imageUrl == null || imageUrl.isEmpty) return null;
 
     try {
-      final cacheKey = widget.cacheKey ?? '${widget.accountId}|$imageUrl';
-      final cached = await _sharedThumbnailResolver.readCached(cacheKey);
-      if (cached != null) return cached;
+      // A media id alone is not a content version. Include the resolved URL
+      // so an upserted remote file cannot display bytes cached for an older
+      // revision of the same row.
+      final cacheKey = widget.cacheKey ?? widget.accountId;
+      // Capture this before any await. A provider can refresh credentials
+      // asynchronously while an account is unlinked and linked again.
+      final accountId = widget.accountId;
+      final accountGeneration = AccountOperationGate.generationFor(accountId);
+
+      // Disk cache remains usable while offline or after an OAuth expiry.
+      final cached = await _sharedThumbnailResolver.readCached(
+        cacheKey,
+        accountId: accountId,
+        accountGeneration: accountGeneration,
+      );
+      if (cached != null &&
+          AccountOperationGate.isCurrent(accountId, accountGeneration)) {
+        return cached;
+      }
+      if (!AccountOperationGate.isCurrent(accountId, accountGeneration)) {
+        return null;
+      }
 
       final headers = <String, String>{...?(widget.headers)};
       if (!headers.containsKey('Authorization')) {
         headers.addAll(
-          await ref
-              .read(authRepositoryProvider)
-              .getAuthHeaders(widget.accountId),
+          await ref.read(authRepositoryProvider).getAuthHeaders(accountId),
         );
+      }
+      if (!AccountOperationGate.isCurrent(accountId, accountGeneration)) {
+        return null;
       }
       return _sharedThumbnailResolver.resolve(
         imageUrl,
         headers,
         cacheKey: cacheKey,
+        accountId: accountId,
+        accountGeneration: accountGeneration,
       );
     } catch (error, stackTrace) {
       AppLogger.error(

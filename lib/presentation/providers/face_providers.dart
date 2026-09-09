@@ -23,8 +23,9 @@ final faceDetectionServiceProvider = Provider<FaceDetectionService>((ref) {
   return service;
 });
 
-final faceEmbeddingServiceProvider =
-    FutureProvider<FaceEmbeddingService>((ref) async {
+final faceEmbeddingServiceProvider = FutureProvider<FaceEmbeddingService>((
+  ref,
+) async {
   AppLogger.info('Loading MobileFaceNet model...');
   final service = FaceEmbeddingService();
   await service.initialize();
@@ -65,8 +66,8 @@ final aiPipelineProvider = FutureProvider<AIPipelineOrchestrator>((ref) async {
 
 final faceScanNotifierProvider =
     NotifierProvider<FaceScanNotifier, AsyncValue<void>>(() {
-  return FaceScanNotifier();
-});
+      return FaceScanNotifier();
+    });
 
 class FaceScanNotifier extends Notifier<AsyncValue<void>> {
   @override
@@ -93,11 +94,13 @@ class FaceScanNotifier extends Notifier<AsyncValue<void>> {
 
       final faceRepo = await ref.read(faceRepositoryProvider.future);
       final counts = await faceRepo.getDiagnosticCounts();
-      AppLogger.info('FaceScanNotifier: DB state — '
-          '${counts['totalMedia']} media, ${counts['processedMedia']} processed, '
-          '${counts['unprocessedMedia']} unprocessed, '
-          '${counts['faces']} faces, ${counts['clusters']} clusters, '
-          '${counts['unclusteredFaces']} unclustered');
+      AppLogger.info(
+        'FaceScanNotifier: DB state — '
+        '${counts['totalMedia']} media, ${counts['processedMedia']} processed, '
+        '${counts['unprocessedMedia']} unprocessed, '
+        '${counts['faces']} faces, ${counts['clusters']} clusters, '
+        '${counts['unclusteredFaces']} unclustered',
+      );
 
       final pipeline = await ref.read(aiPipelineProvider.future);
       if (pipeline.isRunning) {
@@ -110,12 +113,18 @@ class FaceScanNotifier extends Notifier<AsyncValue<void>> {
       AppLogger.info('FaceScanNotifier: processNewMedia complete');
       state = const AsyncData(null);
     } on TokenExpiredException catch (e, st) {
-      AppLogger.error('FaceScanNotifier: scan failed due to token expiration',
-          error: e, stackTrace: st);
+      AppLogger.error(
+        'FaceScanNotifier: scan failed due to token expiration',
+        error: e,
+        stackTrace: st,
+      );
       state = AsyncError(e, st);
     } catch (e, st) {
-      AppLogger.error('FaceScanNotifier: scan failed',
-          error: e, stackTrace: st);
+      AppLogger.error(
+        'FaceScanNotifier: scan failed',
+        error: e,
+        stackTrace: st,
+      );
       state = AsyncError(e, st);
     } finally {
       try {
@@ -132,11 +141,15 @@ class FaceScanNotifier extends Notifier<AsyncValue<void>> {
       await faceRepo.resetAllFaceData();
       ref.invalidate(peopleProvider);
       AppLogger.info(
-          'FaceScanNotifier: reset complete, starting fresh scan...');
+        'FaceScanNotifier: reset complete, starting fresh scan...',
+      );
       await startScan();
     } catch (e, st) {
-      AppLogger.error('FaceScanNotifier: reset & rescan failed',
-          error: e, stackTrace: st);
+      AppLogger.error(
+        'FaceScanNotifier: reset & rescan failed',
+        error: e,
+        stackTrace: st,
+      );
       state = AsyncError(e, st);
     }
   }
@@ -153,20 +166,22 @@ final pipelineProgressProvider = StreamProvider<PipelineProgress>((ref) async* {
 });
 
 final mediaForPersonProvider =
-    FutureProvider.family<List<MediaItemEntity>, String>(
-        (ref, clusterId) async {
-  final faceRepo = await ref.watch(faceRepositoryProvider.future);
-  return faceRepo.getMediaForCluster(clusterId);
-});
+    StreamProvider.family<List<MediaItemEntity>, String>((
+      ref,
+      clusterId,
+    ) async* {
+      final faceRepo = await ref.watch(faceRepositoryProvider.future);
+      yield* faceRepo.watchMediaForCluster(clusterId);
+    });
 
 final representativeMediaProvider =
-    FutureProvider.family<MediaItemEntity?, String>((ref, clusterId) async {
-  final faceRepo = await ref.watch(faceRepositoryProvider.future);
-  return faceRepo.getRepresentativeMediaForCluster(clusterId);
-});
+    StreamProvider.family<MediaItemEntity?, String>((ref, clusterId) async* {
+      final faceRepo = await ref.watch(faceRepositoryProvider.future);
+      yield* faceRepo.watchRepresentativeMediaForCluster(clusterId);
+    });
 
 final representativeFaceThumbnailProvider =
-    FutureProvider.family<Uint8List?, String>((ref, clusterId) async {
-  final faceRepo = await ref.watch(faceRepositoryProvider.future);
-  return faceRepo.getRepresentativeFaceThumbnail(clusterId);
-});
+    StreamProvider.family<Uint8List?, String>((ref, clusterId) async* {
+      final faceRepo = await ref.watch(faceRepositoryProvider.future);
+      yield* faceRepo.watchRepresentativeFaceThumbnail(clusterId);
+    });

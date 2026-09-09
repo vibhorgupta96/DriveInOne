@@ -1,8 +1,10 @@
 import '../entities/media_item.dart';
 
 abstract class MediaRepository {
-  Future<List<MediaItemEntity>> getTimeline(
-      {required int limit, required int offset});
+  Future<List<MediaItemEntity>> getTimeline({
+    required int limit,
+    required int offset,
+  });
   Future<List<MediaItemEntity>> getTimelineAfter({
     required int limit,
     DateTime? beforeTimestamp,
@@ -10,7 +12,9 @@ abstract class MediaRepository {
   });
   Stream<List<MediaItemEntity>> watchTimeline();
   Future<List<MediaItemEntity>> getMediaByDateRange(
-      DateTime start, DateTime end);
+    DateTime start,
+    DateTime end,
+  );
   Future<List<MediaItemEntity>> getMediaByAccount(String accountId);
   Future<List<MediaItemEntity>> searchMedia(
     String query, {

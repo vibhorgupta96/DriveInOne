@@ -21,7 +21,10 @@ class MediaThumbnail extends StatelessWidget {
             AuthenticatedImage(
               imageUrl: item.thumbnailUrl,
               accountId: item.accountId,
-              cacheKey: 'media:${item.id}',
+              // Provider marker URLs are stable across edits; use the remote
+              // content hash (or sync revision fallback) to invalidate bytes.
+              cacheKey:
+                  '${item.accountId}|${item.id}|${item.fileHash ?? item.syncedAt.microsecondsSinceEpoch}',
               fit: BoxFit.cover,
             ),
             if (item.mediaType == MediaType.video)
@@ -29,8 +32,10 @@ class MediaThumbnail extends StatelessWidget {
                 bottom: 4,
                 right: 4,
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.7),
                     borderRadius: BorderRadius.circular(4),
@@ -38,8 +43,11 @@ class MediaThumbnail extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.play_arrow,
-                          color: Colors.white, size: 12),
+                      const Icon(
+                        Icons.play_arrow,
+                        color: Colors.white,
+                        size: 12,
+                      ),
                       const SizedBox(width: 2),
                       Text(
                         item.formattedDuration,

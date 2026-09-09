@@ -26,9 +26,9 @@ class AccountSyncOutcome {
     required this.accountId,
     required this.accountLabel,
     required String error,
-  })  : itemsSynced = 0,
-        itemsDeleted = 0,
-        errorMessage = error;
+  }) : itemsSynced = 0,
+       itemsDeleted = 0,
+       errorMessage = error;
 
   bool get succeeded => errorMessage == null;
 }

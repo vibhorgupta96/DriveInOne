@@ -1,18 +1,21 @@
 class ProviderConstants {
   // OAuth identifiers are public application configuration, supplied at build
   // time. OAuth client secrets must never be embedded in a mobile binary.
-  static const String googleWebClientId =
-      String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
-  static const String googleIosClientId =
-      String.fromEnvironment('GOOGLE_IOS_CLIENT_ID');
+  static const String googleWebClientId = String.fromEnvironment(
+    'GOOGLE_WEB_CLIENT_ID',
+  );
+  static const String googleIosClientId = String.fromEnvironment(
+    'GOOGLE_IOS_CLIENT_ID',
+  );
   static const String googleDriveScope =
       'https://www.googleapis.com/auth/drive.readonly';
   static const String googleDriveBaseUrl =
       'https://www.googleapis.com/drive/v3';
 
   // Microsoft / OneDrive
-  static const String microsoftClientId =
-      String.fromEnvironment('MICROSOFT_CLIENT_ID');
+  static const String microsoftClientId = String.fromEnvironment(
+    'MICROSOFT_CLIENT_ID',
+  );
   static const String microsoftRedirectUri =
       'com.driveinone.app://oauth2redirect';
   static const String microsoftDiscoveryUrl =
@@ -20,7 +23,7 @@ class ProviderConstants {
   static const List<String> microsoftScopes = [
     'Files.Read.All',
     'User.Read',
-    'offline_access'
+    'offline_access',
   ];
   static const String graphBaseUrl = 'https://graph.microsoft.com/v1.0';
 
@@ -35,7 +38,7 @@ class ProviderConstants {
   static const List<String> dropboxScopes = [
     'files.content.read',
     'files.metadata.read',
-    'account_info.read'
+    'account_info.read',
   ];
   static const String dropboxApiBaseUrl = 'https://api.dropboxapi.com/2';
   static const String dropboxContentBaseUrl =

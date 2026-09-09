@@ -20,10 +20,12 @@ class PersonCircle extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final representativeFaceThumb =
-        ref.watch(representativeFaceThumbnailProvider(cluster.id));
-    final representativeMedia =
-        ref.watch(representativeMediaProvider(cluster.id));
+    final representativeFaceThumb = ref.watch(
+      representativeFaceThumbnailProvider(cluster.id),
+    );
+    final representativeMedia = ref.watch(
+      representativeMediaProvider(cluster.id),
+    );
     final showAddName = cluster.label == null || cluster.label!.trim().isEmpty;
 
     return GestureDetector(
@@ -46,18 +48,20 @@ class PersonCircle extends ConsumerWidget {
                             faceBytes,
                             fit: BoxFit.cover,
                             gaplessPlayback: true,
-                            errorBuilder: (_, __, ___) => _fallbackMediaThumb(
+                            errorBuilder: (_, _, _) => _fallbackMediaThumb(
                               context,
                               representativeMedia,
                             ),
                           );
                         }
                         return _fallbackMediaThumb(
-                            context, representativeMedia);
+                          context,
+                          representativeMedia,
+                        );
                       },
                       loading: () =>
                           _fallbackMediaThumb(context, representativeMedia),
-                      error: (_, __) =>
+                      error: (_, _) =>
                           _fallbackMediaThumb(context, representativeMedia),
                     ),
                   ),
@@ -92,11 +96,11 @@ class PersonCircle extends ConsumerWidget {
             child: Text(
               showAddName ? 'Add name' : cluster.displayName,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: showAddName
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                    fontWeight: showAddName ? FontWeight.w600 : null,
-                  ),
+                color: showAddName
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+                fontWeight: showAddName ? FontWeight.w600 : null,
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
@@ -106,10 +110,10 @@ class PersonCircle extends ConsumerWidget {
           SizedBox(
             width: 96,
             child: Text(
-              '${cluster.faceCount} photos',
+              '${cluster.faceCount} appearances',
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
+                color: Theme.of(context).colorScheme.outline,
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
@@ -130,12 +134,13 @@ class PersonCircle extends ConsumerWidget {
         return AuthenticatedImage(
           imageUrl: media.thumbnailUrl,
           accountId: media.accountId,
-          cacheKey: 'media:${media.id}',
+          cacheKey:
+              '${media.accountId}|${media.id}|${media.fileHash ?? media.syncedAt.microsecondsSinceEpoch}',
           fit: BoxFit.cover,
         );
       },
       loading: () => _placeholder(context),
-      error: (_, __) => _placeholder(context),
+      error: (_, _) => _placeholder(context),
     );
   }
 

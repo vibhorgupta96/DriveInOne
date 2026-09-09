@@ -13,33 +13,39 @@ class OneDriveProvider extends CloudProvider {
   final FlutterAppAuth _appAuth = const FlutterAppAuth();
   late final Dio _dio;
 
-  OneDriveProvider() {
-    _dio = Dio(BaseOptions(
-      baseUrl: ProviderConstants.graphBaseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
-    _dio.interceptors.add(InterceptorsWrapper(
-      onError: (error, handler) async {
-        if (error.response?.statusCode == 401 &&
-            refreshToken != null &&
-            error.requestOptions.extra['oneDriveAuthRetried'] != true) {
-          try {
-            await refreshTokenIfNeeded(force: true);
-            final headers = await getAuthHeaders();
-            final opts = error.requestOptions;
-            opts.extra['oneDriveAuthRetried'] = true;
-            opts.headers.addAll(headers);
-            final response = await Dio().fetch(opts);
-            return handler.resolve(response);
-          } catch (e) {
-            AppLogger.error('OneDrive 401 retry failed', error: e);
-            return handler.next(error);
+  OneDriveProvider({Dio? dio}) {
+    _dio =
+        dio ??
+        Dio(
+          BaseOptions(
+            baseUrl: ProviderConstants.graphBaseUrl,
+            connectTimeout: const Duration(seconds: 30),
+            receiveTimeout: const Duration(seconds: 30),
+          ),
+        );
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onError: (error, handler) async {
+          if (error.response?.statusCode == 401 &&
+              refreshToken != null &&
+              error.requestOptions.extra['oneDriveAuthRetried'] != true) {
+            try {
+              await refreshTokenIfNeeded(force: true);
+              final headers = await getAuthHeaders();
+              final opts = error.requestOptions;
+              opts.extra['oneDriveAuthRetried'] = true;
+              opts.headers.addAll(headers);
+              final response = await Dio().fetch(opts);
+              return handler.resolve(response);
+            } catch (e) {
+              AppLogger.error('OneDrive 401 retry failed', error: e);
+              return handler.next(error);
+            }
           }
-        }
-        return handler.next(error);
-      },
-    ));
+          return handler.next(error);
+        },
+      ),
+    );
   }
 
   @override
@@ -82,7 +88,8 @@ class OneDriveProvider extends CloudProvider {
         options: Options(headers: headers),
       );
       final profile = profileResponse.data as Map<String, dynamic>;
-      final email = profile['mail'] as String? ??
+      final email =
+          profile['mail'] as String? ??
           profile['userPrincipalName'] as String? ??
           'unknown';
 
@@ -119,7 +126,8 @@ class OneDriveProvider extends CloudProvider {
     if (!force && !isTokenExpired && accessToken != null) return;
     if (refreshToken == null) {
       throw const AuthException(
-          message: 'No refresh token available for OneDrive');
+        message: 'No refresh token available for OneDrive',
+      );
     }
 
     try {
@@ -149,7 +157,9 @@ class OneDriveProvider extends CloudProvider {
     } catch (e) {
       if (e is AuthException) rethrow;
       throw AuthException(
-          message: 'OneDrive token refresh failed', originalError: e);
+        message: 'OneDrive token refresh failed',
+        originalError: e,
+      );
     }
   }
 
@@ -158,6 +168,7 @@ class OneDriveProvider extends CloudProvider {
     final headers = await getAuthHeaders();
     final changedItems = <MediaItemModel>[];
     final deletedIds = <String>[];
+    final orderedEvents = <SyncDeltaEvent>[];
 
     try {
       String? nextLink;
@@ -180,7 +191,10 @@ class OneDriveProvider extends CloudProvider {
           // Check if deleted
           if (item['deleted'] != null) {
             final id = item['id'] as String?;
-            if (id != null) deletedIds.add(id);
+            if (id != null) {
+              deletedIds.add(id);
+              orderedEvents.add(SyncDeltaEvent.deleted(id));
+            }
             continue;
           }
 
@@ -194,7 +208,9 @@ class OneDriveProvider extends CloudProvider {
             continue;
           }
 
-          changedItems.add(_mapItemToMediaItem(item));
+          final changed = _mapItemToMediaItem(item);
+          changedItems.add(changed);
+          orderedEvents.add(SyncDeltaEvent.changed(changed));
         }
 
         nextLink = data['@odata.nextLink'] as String?;
@@ -205,8 +221,16 @@ class OneDriveProvider extends CloudProvider {
         changedItems: changedItems,
         deletedRemoteIds: deletedIds,
         newSyncToken: deltaLink ?? syncToken,
+        orderedEvents: orderedEvents,
+        isFullSnapshot: syncToken == null,
       );
     } on DioException catch (e) {
+      // A delta link can expire (Gone). Do not return the partial page that
+      // preceded it; restart from root and let repository reconciliation apply
+      // only the complete enumeration.
+      if (e.response?.statusCode == 410 && syncToken != null) {
+        return scanDelta(null);
+      }
       throw ApiException(
         message: 'OneDrive sync failed',
         statusCode: e.response?.statusCode,
@@ -272,9 +296,15 @@ class OneDriveProvider extends CloudProvider {
       width: image?['width'] as int? ?? video?['width'] as int?,
       height: image?['height'] as int? ?? video?['height'] as int?,
       fileSize: item['size'] as int?,
-      durationSeconds:
-          video != null ? ((video['duration'] as int?) ?? 0) ~/ 1000 : null,
-      fileHash: item['file']?['hashes']?['sha1Hash'] as String?,
+      durationSeconds: video != null
+          ? ((video['duration'] as int?) ?? 0) ~/ 1000
+          : null,
+      fileHash:
+          item['file']?['hashes']?['sha1Hash'] as String? ??
+          item['file']?['hashes']?['quickXorHash'] as String? ??
+          item['cTag'] as String? ??
+          item['eTag'] as String? ??
+          item['lastModifiedDateTime'] as String?,
       timestamp: timestamp,
     );
   }

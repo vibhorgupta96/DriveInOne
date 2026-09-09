@@ -70,8 +70,8 @@ class PersonDetailScreen extends ConsumerWidget {
                   child: Text(
                     '${items.length} photos & videos',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
                   ),
                 ),
                 MediaGrid(items: items),
@@ -86,7 +86,10 @@ class PersonDetailScreen extends ConsumerWidget {
   }
 
   void _showRenameDialog(
-      BuildContext context, WidgetRef ref, String currentName) {
+    BuildContext context,
+    WidgetRef ref,
+    String currentName,
+  ) {
     final controller = TextEditingController(text: currentName);
     showDialog(
       context: context,
@@ -111,9 +114,7 @@ class PersonDetailScreen extends ConsumerWidget {
               if (name.isNotEmpty) {
                 ref
                     .read(faceRepositoryProvider.future)
-                    .then(
-                      (repo) => repo.renameCluster(clusterId, name),
-                    )
+                    .then((repo) => repo.renameCluster(clusterId, name))
                     .catchError((_) {});
               }
               Navigator.pop(context);

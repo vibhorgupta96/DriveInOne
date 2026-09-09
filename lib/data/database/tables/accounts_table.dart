@@ -15,8 +15,4 @@ class Accounts extends Table {
 }
 
 // Drift requires its own enum - maps to ProviderType
-enum ProviderTypeEnum {
-  google,
-  onedrive,
-  dropbox,
-}
+enum ProviderTypeEnum { google, onedrive, dropbox }

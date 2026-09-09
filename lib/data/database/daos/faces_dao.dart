@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart';
@@ -6,6 +7,23 @@ import '../tables/faces_table.dart';
 import '../tables/face_clusters_table.dart';
 
 part 'faces_dao.g.dart';
+
+/// A consistent input view for an asynchronous clustering run.
+///
+/// The fingerprint deliberately excludes cluster labels: naming a person
+/// during a run is safe and [replaceClusterStateIfSnapshotCurrent] preserves
+/// the current label when it applies the result.
+class FaceClusteringSnapshot {
+  const FaceClusteringSnapshot({
+    required this.faces,
+    required this.clusters,
+    required this.fingerprint,
+  });
+
+  final List<Face> faces;
+  final List<FaceCluster> clusters;
+  final String fingerprint;
+}
 
 @DriftAccessor(tables: [Faces, FaceClusters])
 class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
@@ -24,8 +42,9 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
     List<FacesCompanion> replacements,
   ) {
     return transaction(() async {
-      await (delete(faces)..where((f) => f.mediaItemId.equals(mediaItemId)))
-          .go();
+      await (delete(
+        faces,
+      )..where((f) => f.mediaItemId.equals(mediaItemId))).go();
       for (final face in replacements) {
         await into(faces).insert(face);
       }
@@ -44,45 +63,65 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
 
   Future<List<Face>> getAllFaces() => select(faces).get();
 
+  /// Reads the clustering inputs together so an isolate never works from a
+  /// half-updated face/cluster view.
+  Future<FaceClusteringSnapshot> captureClusteringSnapshot() {
+    return transaction(() async {
+      final snapshotFaces = await select(faces).get();
+      final snapshotClusters = await select(faceClusters).get();
+      return FaceClusteringSnapshot(
+        faces: snapshotFaces,
+        clusters: snapshotClusters,
+        fingerprint: _clusteringFingerprint(snapshotFaces, snapshotClusters),
+      );
+    });
+  }
+
   Future<void> updateFaceCluster(String faceId, String clusterId) =>
-      (update(faces)..where((f) => f.id.equals(faceId)))
-          .write(FacesCompanion(clusterId: Value(clusterId)));
+      (update(faces)..where((f) => f.id.equals(faceId))).write(
+        FacesCompanion(clusterId: Value(clusterId)),
+      );
 
   // Face Clusters
-  Future<List<FaceCluster>> getAllClusters() =>
-      (select(faceClusters)..orderBy([(c) => OrderingTerm.desc(c.faceCount)]))
-          .get();
+  Future<List<FaceCluster>> getAllClusters() => (select(
+    faceClusters,
+  )..orderBy([(c) => OrderingTerm.desc(c.faceCount)])).get();
 
-  Stream<List<FaceCluster>> watchClusters() =>
-      (select(faceClusters)..orderBy([(c) => OrderingTerm.desc(c.faceCount)]))
-          .watch();
+  Stream<List<FaceCluster>> watchClusters() => (select(
+    faceClusters,
+  )..orderBy([(c) => OrderingTerm.desc(c.faceCount)])).watch();
 
   Future<void> insertCluster(FaceClustersCompanion cluster) =>
       into(faceClusters).insert(cluster, mode: InsertMode.insertOrReplace);
 
   Future<void> updateClusterLabel(String clusterId, String label) =>
-      (update(faceClusters)..where((c) => c.id.equals(clusterId)))
-          .write(FaceClustersCompanion(label: Value(label)));
+      (update(faceClusters)..where((c) => c.id.equals(clusterId))).write(
+        FaceClustersCompanion(label: Value(label)),
+      );
 
   Future<void> updateClusterCentroid(
-          String clusterId, Uint8List centroid, int count) =>
-      (update(faceClusters)..where((c) => c.id.equals(clusterId))).write(
-          FaceClustersCompanion(
-              centroidEmbedding: Value(centroid), faceCount: Value(count)));
+    String clusterId,
+    Uint8List centroid,
+    int count,
+  ) => (update(faceClusters)..where((c) => c.id.equals(clusterId))).write(
+    FaceClustersCompanion(
+      centroidEmbedding: Value(centroid),
+      faceCount: Value(count),
+    ),
+  );
 
   Future<void> updateClusterStats(
     String clusterId, {
     required Uint8List centroid,
     required int count,
     required String? representativeFaceId,
-  }) =>
-      (update(faceClusters)..where((c) => c.id.equals(clusterId))).write(
-        FaceClustersCompanion(
-          centroidEmbedding: Value(centroid),
-          faceCount: Value(count),
-          representativeFaceId: Value(representativeFaceId),
-        ),
-      );
+  }) => (update(faceClusters)..where((c) => c.id.equals(clusterId))).write(
+    FaceClustersCompanion(
+      centroidEmbedding: Value(centroid),
+      faceCount: Value(count),
+      representativeFaceId: Value(representativeFaceId),
+    ),
+  );
 
   /// Atomically applies a complete clustering result while preserving labels
   /// on clusters that continue to exist.
@@ -92,47 +131,87 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
     required Map<String, int> counts,
     required Map<String, String?> representatives,
   }) {
+    return transaction(
+      () => _replaceClusterState(
+        assignments: assignments,
+        centroids: centroids,
+        counts: counts,
+        representatives: representatives,
+      ),
+    );
+  }
+
+  /// Applies an isolate result only when the exact face/cluster input that
+  /// produced it still exists.  This prevents a late worker from recreating
+  /// clusters removed by unlink or overwriting assignments from new scans.
+  Future<bool> replaceClusterStateIfSnapshotCurrent({
+    required FaceClusteringSnapshot snapshot,
+    required Map<String, String> assignments,
+    required Map<String, Uint8List> centroids,
+    required Map<String, int> counts,
+    required Map<String, String?> representatives,
+  }) {
     return transaction(() async {
-      await update(faces).write(
-        const FacesCompanion(clusterId: Value(null)),
+      final currentFaces = await select(faces).get();
+      final currentClusters = await select(faceClusters).get();
+      if (_clusteringFingerprint(currentFaces, currentClusters) !=
+          snapshot.fingerprint) {
+        return false;
+      }
+      await _replaceClusterState(
+        assignments: assignments,
+        centroids: centroids,
+        counts: counts,
+        representatives: representatives,
       );
-
-      for (final entry in assignments.entries) {
-        await (update(faces)..where((f) => f.id.equals(entry.key))).write(
-          FacesCompanion(clusterId: Value(entry.value)),
-        );
-      }
-
-      final existingClusters = await select(faceClusters).get();
-      final existingIds = existingClusters.map((cluster) => cluster.id).toSet();
-      final finalIds = centroids.keys.toSet();
-
-      for (final clusterId in finalIds) {
-        final centroid = centroids[clusterId];
-        if (centroid == null) continue;
-        final companion = FaceClustersCompanion(
-          centroidEmbedding: Value(centroid),
-          faceCount: Value(counts[clusterId] ?? 0),
-          representativeFaceId: Value(representatives[clusterId]),
-        );
-        if (existingIds.contains(clusterId)) {
-          await (update(faceClusters)
-                ..where((cluster) => cluster.id.equals(clusterId)))
-              .write(companion);
-        } else {
-          await into(faceClusters).insert(
-            companion.copyWith(id: Value(clusterId)),
-          );
-        }
-      }
-
-      for (final staleCluster in existingClusters
-          .where((cluster) => !finalIds.contains(cluster.id))) {
-        await (delete(faceClusters)
-              ..where((cluster) => cluster.id.equals(staleCluster.id)))
-            .go();
-      }
+      return true;
     });
+  }
+
+  Future<void> _replaceClusterState({
+    required Map<String, String> assignments,
+    required Map<String, Uint8List> centroids,
+    required Map<String, int> counts,
+    required Map<String, String?> representatives,
+  }) async {
+    await update(faces).write(const FacesCompanion(clusterId: Value(null)));
+
+    for (final entry in assignments.entries) {
+      await (update(faces)..where((f) => f.id.equals(entry.key))).write(
+        FacesCompanion(clusterId: Value(entry.value)),
+      );
+    }
+
+    final existingClusters = await select(faceClusters).get();
+    final existingIds = existingClusters.map((cluster) => cluster.id).toSet();
+    final finalIds = centroids.keys.toSet();
+
+    for (final clusterId in finalIds) {
+      final centroid = centroids[clusterId];
+      if (centroid == null) continue;
+      final companion = FaceClustersCompanion(
+        centroidEmbedding: Value(centroid),
+        faceCount: Value(counts[clusterId] ?? 0),
+        representativeFaceId: Value(representatives[clusterId]),
+      );
+      if (existingIds.contains(clusterId)) {
+        await (update(
+          faceClusters,
+        )..where((cluster) => cluster.id.equals(clusterId))).write(companion);
+      } else {
+        await into(
+          faceClusters,
+        ).insert(companion.copyWith(id: Value(clusterId)));
+      }
+    }
+
+    for (final staleCluster in existingClusters.where(
+      (cluster) => !finalIds.contains(cluster.id),
+    )) {
+      await (delete(
+        faceClusters,
+      )..where((cluster) => cluster.id.equals(staleCluster.id))).go();
+    }
   }
 
   Future<List<String>> getMediaIdsForCluster(String clusterId) async {
@@ -141,9 +220,39 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
     return results.map((f) => f.mediaItemId).toSet().toList();
   }
 
+  Stream<List<String>> watchMediaIdsForCluster(String clusterId) =>
+      customSelect(
+        'SELECT DISTINCT f.media_item_id FROM faces f '
+        'INNER JOIN media_items m ON m.id = f.media_item_id '
+        'WHERE f.cluster_id = ? AND m.is_deleted = 0',
+        variables: [Variable.withString(clusterId)],
+        readsFrom: {faces, attachedDatabase.mediaItems},
+      ).watch().map(
+        (rows) => rows.map((row) => row.read<String>('media_item_id')).toList(),
+      );
+
+  Stream<FaceCluster?> watchClusterById(String clusterId) => (select(
+    faceClusters,
+  )..where((c) => c.id.equals(clusterId))).watchSingleOrNull();
+
+  /// Emits whenever the representative face or its media revision changes.
+  /// Joining all three tables fixes person bubbles that otherwise remain stale
+  /// after a sync changes a thumbnail without changing cluster metadata.
+  Stream<void> watchRepresentativeRevision(String clusterId) => customSelect(
+    'SELECT c.representative_face_id, f.media_item_id, m.synced_at, '
+    'm.file_hash, m.thumbnail_url, m.is_deleted '
+    'FROM face_clusters c '
+    'LEFT JOIN faces f ON f.id = c.representative_face_id '
+    'LEFT JOIN media_items m ON m.id = f.media_item_id '
+    'WHERE c.id = ?',
+    variables: [Variable.withString(clusterId)],
+    readsFrom: {faces, faceClusters, attachedDatabase.mediaItems},
+  ).watch().map((_) {});
+
   Future<void> deleteCluster(String clusterId) async {
-    await (update(faces)..where((f) => f.clusterId.equals(clusterId)))
-        .write(const FacesCompanion(clusterId: Value(null)));
+    await (update(faces)..where((f) => f.clusterId.equals(clusterId))).write(
+      const FacesCompanion(clusterId: Value(null)),
+    );
     await (delete(faceClusters)..where((c) => c.id.equals(clusterId))).go();
   }
 
@@ -183,16 +292,18 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
   Future<void> _repairClusterReferences() async {
     final clusters = await select(faceClusters).get();
     for (final cluster in clusters) {
-      final remainingFaces = await (select(faces)
-            ..where((face) => face.clusterId.equals(cluster.id)))
-          .get();
+      final remainingFaces = await (select(
+        faces,
+      )..where((face) => face.clusterId.equals(cluster.id))).get();
       if (remainingFaces.isEmpty) {
-        await (delete(faceClusters)..where((c) => c.id.equals(cluster.id)))
-            .go();
+        await (delete(
+          faceClusters,
+        )..where((c) => c.id.equals(cluster.id))).go();
         continue;
       }
 
-      final representativeStillExists = cluster.representativeFaceId != null &&
+      final representativeStillExists =
+          cluster.representativeFaceId != null &&
           remainingFaces.any((face) => face.id == cluster.representativeFaceId);
       await (update(faceClusters)..where((c) => c.id.equals(cluster.id))).write(
         FaceClustersCompanion(
@@ -263,5 +374,39 @@ class FacesDao extends DatabaseAccessor<AppDatabase> with _$FacesDaoMixin {
       await delete(faces).go();
       await delete(faceClusters).go();
     });
+  }
+
+  String _clusteringFingerprint(
+    List<Face> snapshotFaces,
+    List<FaceCluster> snapshotClusters,
+  ) {
+    final faceParts =
+        snapshotFaces
+            .map(
+              (face) => [
+                face.id,
+                face.mediaItemId,
+                base64Encode(face.embedding),
+                face.clusterId ?? '',
+                face.detectedAt.toIso8601String(),
+              ].join('|'),
+            )
+            .toList()
+          ..sort();
+    final clusterParts =
+        snapshotClusters
+            .map(
+              (cluster) => [
+                cluster.id,
+                cluster.representativeFaceId ?? '',
+                cluster.faceCount.toString(),
+                cluster.centroidEmbedding == null
+                    ? ''
+                    : base64Encode(cluster.centroidEmbedding!),
+              ].join('|'),
+            )
+            .toList()
+          ..sort();
+    return '${faceParts.join('\n')}\u0000${clusterParts.join('\n')}';
   }
 }

@@ -12,8 +12,6 @@ class SearchResults extends StatelessWidget {
     if (items.isEmpty) {
       return const Center(child: Text('No results found'));
     }
-    return SingleChildScrollView(
-      child: MediaGrid(items: items),
-    );
+    return SingleChildScrollView(child: MediaGrid(items: items));
   }
 }

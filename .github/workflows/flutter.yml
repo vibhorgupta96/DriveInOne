@@ -36,3 +36,17 @@ jobs:
 
       - name: Build debug APK
         run: flutter build apk --debug --no-pub
+
+  ios-build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.1
+          cache: true
+      - run: flutter pub get
+      - name: Build unsigned iOS app
+        run: flutter build ios --debug --no-codesign --no-pub

@@ -13,12 +13,14 @@ void main() {
 
   setUp(() async {
     db = AppDatabase(NativeDatabase.memory());
-    await db.accountsDao.insertAccount(AccountsCompanion.insert(
-      id: 'dropbox-account',
-      providerType: ProviderTypeEnum.dropbox,
-      email: 'photos@example.com',
-      displayName: const Value('Holiday Archive'),
-    ));
+    await db.accountsDao.insertAccount(
+      AccountsCompanion.insert(
+        id: 'dropbox-account',
+        providerType: ProviderTypeEnum.dropbox,
+        email: 'photos@example.com',
+        displayName: const Value('Holiday Archive'),
+      ),
+    );
   });
 
   tearDown(() => db.close());
@@ -58,60 +60,76 @@ void main() {
     await db.mediaItemsDao.upsertMediaItem(
       media(id: 'one', fileName: 'renamed.jpg'),
     );
-    expect((await db.mediaItemsDao.getMediaItemById('one'))!.facesProcessed,
-        isTrue);
+    expect(
+      (await db.mediaItemsDao.getMediaItemById('one'))!.facesProcessed,
+      isTrue,
+    );
 
     await db.mediaItemsDao.upsertMediaItem(
       media(id: 'one', fileName: 'renamed.jpg', hash: 'hash-b'),
     );
-    expect((await db.mediaItemsDao.getMediaItemById('one'))!.facesProcessed,
-        isFalse);
-  });
-
-  test('search covers metadata, provider, and account while hiding deletes',
-      () async {
-    await db.mediaItemsDao.batchUpsert([
-      media(id: 'one'),
-      media(
-        id: 'two',
-        fileName: 'clip.mov',
-        mimeType: 'video/quicktime',
-        remotePath: '/private/clip.mov',
-      ),
-    ]);
-
-    expect(await db.mediaItemsDao.searchMedia('quicktime'), hasLength(1));
-    expect(await db.mediaItemsDao.searchMedia('camera'), hasLength(1));
-    expect(await db.mediaItemsDao.searchMedia('Holiday Archive'), hasLength(2));
-    expect(await db.mediaItemsDao.searchMedia('dropbox'), hasLength(2));
     expect(
-        await db.mediaItemsDao.searchMedia('photos@example.com'), hasLength(2));
-
-    await db.mediaItemsDao.markDeleted('dropbox-account', 'remote-one');
-    expect(await db.mediaItemsDao.searchMedia('sunset'), isEmpty);
-    expect(await db.mediaItemsDao.getMediaItemsByIds(['one', 'two']),
-        hasLength(1));
+      (await db.mediaItemsDao.getMediaItemById('one'))!.facesProcessed,
+      isFalse,
+    );
   });
+
+  test(
+    'search covers metadata, provider, and account while hiding deletes',
+    () async {
+      await db.mediaItemsDao.batchUpsert([
+        media(id: 'one'),
+        media(
+          id: 'two',
+          fileName: 'clip.mov',
+          mimeType: 'video/quicktime',
+          remotePath: '/private/clip.mov',
+        ),
+      ]);
+
+      expect(await db.mediaItemsDao.searchMedia('quicktime'), hasLength(1));
+      expect(await db.mediaItemsDao.searchMedia('camera'), hasLength(1));
+      expect(
+        await db.mediaItemsDao.searchMedia('Holiday Archive'),
+        hasLength(2),
+      );
+      expect(await db.mediaItemsDao.searchMedia('dropbox'), hasLength(2));
+      expect(
+        await db.mediaItemsDao.searchMedia('photos@example.com'),
+        hasLength(2),
+      );
+
+      await db.mediaItemsDao.markDeleted('dropbox-account', 'remote-one');
+      expect(await db.mediaItemsDao.searchMedia('sunset'), isEmpty);
+      expect(
+        await db.mediaItemsDao.getMediaItemsByIds(['one', 'two']),
+        hasLength(1),
+      );
+    },
+  );
 
   test('path deletion keys match Dropbox paths', () async {
     await db.mediaItemsDao.upsertMediaItem(media(id: 'one'));
-    await db.facesDao.insertCluster(FaceClustersCompanion.insert(
-      id: 'deleted-cluster',
-      representativeFaceId: const Value('deleted-face'),
-      faceCount: const Value(1),
-    ));
-    await db.facesDao.insertFace(FacesCompanion.insert(
-      id: 'deleted-face',
-      mediaItemId: 'one',
-      boundingBox: '{}',
-      embedding: _embedding(1),
-      clusterId: const Value('deleted-cluster'),
-    ));
-
-    await db.mediaItemsDao.batchMarkDeleted(
-      'dropbox-account',
-      ['path:/camera/sunset.jpg'],
+    await db.facesDao.insertCluster(
+      FaceClustersCompanion.insert(
+        id: 'deleted-cluster',
+        representativeFaceId: const Value('deleted-face'),
+        faceCount: const Value(1),
+      ),
     );
+    await db.facesDao.insertFace(
+      FacesCompanion.insert(
+        id: 'deleted-face',
+        mediaItemId: 'one',
+        boundingBox: '{}',
+        embedding: _embedding(1),
+        clusterId: const Value('deleted-cluster'),
+      ),
+    );
+
+    await db.mediaItemsDao.batchMarkDeleted('dropbox-account', [
+      'path:/camera/sunset.jpg',
+    ]);
 
     expect((await db.mediaItemsDao.getMediaItemById('one'))!.isDeleted, isTrue);
     expect(await db.facesDao.getFaceById('deleted-face'), isNull);
@@ -145,35 +163,49 @@ void main() {
   });
 
   test('account purge recomputes shared face clusters', () async {
-    await db.accountsDao.insertAccount(AccountsCompanion.insert(
-      id: 'google-account',
-      providerType: ProviderTypeEnum.google,
-      email: 'other@example.com',
-    ));
+    await db.accountsDao.insertAccount(
+      AccountsCompanion.insert(
+        id: 'google-account',
+        providerType: ProviderTypeEnum.google,
+        email: 'other@example.com',
+      ),
+    );
     await db.mediaItemsDao.batchUpsert([
       media(id: 'one'),
       media(id: 'two', accountId: 'google-account'),
     ]);
-    await db.into(db.faceClusters).insert(FaceClustersCompanion.insert(
-          id: 'cluster',
-          representativeFaceId: const Value('face-one'),
-          centroidEmbedding: Value(_embedding(2)),
-          faceCount: const Value(2),
-        ));
-    await db.into(db.faces).insert(FacesCompanion.insert(
-          id: 'face-one',
-          mediaItemId: 'one',
-          boundingBox: '{}',
-          embedding: _embedding(1),
-          clusterId: const Value('cluster'),
-        ));
-    await db.into(db.faces).insert(FacesCompanion.insert(
-          id: 'face-two',
-          mediaItemId: 'two',
-          boundingBox: '{}',
-          embedding: _embedding(3),
-          clusterId: const Value('cluster'),
-        ));
+    await db
+        .into(db.faceClusters)
+        .insert(
+          FaceClustersCompanion.insert(
+            id: 'cluster',
+            representativeFaceId: const Value('face-one'),
+            centroidEmbedding: Value(_embedding(2)),
+            faceCount: const Value(2),
+          ),
+        );
+    await db
+        .into(db.faces)
+        .insert(
+          FacesCompanion.insert(
+            id: 'face-one',
+            mediaItemId: 'one',
+            boundingBox: '{}',
+            embedding: _embedding(1),
+            clusterId: const Value('cluster'),
+          ),
+        );
+    await db
+        .into(db.faces)
+        .insert(
+          FacesCompanion.insert(
+            id: 'face-two',
+            mediaItemId: 'two',
+            boundingBox: '{}',
+            embedding: _embedding(3),
+            clusterId: const Value('cluster'),
+          ),
+        );
 
     await db.deleteAccountData('dropbox-account');
 

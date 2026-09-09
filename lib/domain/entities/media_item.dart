@@ -60,5 +60,26 @@ class MediaItemEntity extends Equatable {
   }
 
   @override
-  List<Object?> get props => [id, accountId, remoteId];
+  // A representative-media provider must notify when a sync replaces the
+  // thumbnail or revision for the same media id. Riverpod compares emitted
+  // values, so identity-only equality leaves person bubbles stale.
+  List<Object?> get props => [
+    id,
+    accountId,
+    remoteId,
+    remotePath,
+    fileName,
+    mimeType,
+    mediaType,
+    thumbnailUrl,
+    fullSizeUrl,
+    width,
+    height,
+    fileSize,
+    durationSeconds,
+    fileHash,
+    timestamp,
+    syncedAt,
+    facesProcessed,
+  ];
 }

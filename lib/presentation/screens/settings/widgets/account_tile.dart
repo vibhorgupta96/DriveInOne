@@ -6,11 +6,7 @@ class AccountTile extends StatelessWidget {
   final AccountEntity account;
   final VoidCallback? onUnlink;
 
-  const AccountTile({
-    super.key,
-    required this.account,
-    this.onUnlink,
-  });
+  const AccountTile({super.key, required this.account, this.onUnlink});
 
   @override
   Widget build(BuildContext context) {

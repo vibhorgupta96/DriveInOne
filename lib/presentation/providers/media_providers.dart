@@ -13,8 +13,10 @@ final timelineProvider = StreamProvider<List<MediaItemEntity>>((ref) {
   return ref.watch(mediaRepositoryProvider).watchTimeline();
 });
 
-final mediaItemProvider =
-    FutureProvider.family<MediaItemEntity?, String>((ref, id) {
+final mediaItemProvider = FutureProvider.family<MediaItemEntity?, String>((
+  ref,
+  id,
+) {
   return ref.watch(mediaRepositoryProvider).getMediaItemById(id);
 });
 
@@ -24,19 +26,144 @@ final mediaCountProvider = FutureProvider<int>((ref) {
 
 final mediaStatsProvider =
     FutureProvider<Map<String, ({int photos, int videos})>>((ref) {
-  return ref.watch(mediaRepositoryProvider).getMediaStatsByAccount();
-});
+      return ref.watch(mediaRepositoryProvider).getMediaStatsByAccount();
+    });
 
-final searchResultsProvider =
-    FutureProvider.family<List<MediaItemEntity>, String>((ref, query) {
-  if (query.isEmpty) return Future.value([]);
-  return ref.watch(mediaRepositoryProvider).searchMedia(query, limit: 100);
-});
+final searchResultsProvider = NotifierProvider.autoDispose
+    .family<SearchResultsNotifier, AsyncValue<SearchResultsState>, String>(
+      SearchResultsNotifier.new,
+    );
+
+class SearchResultsState {
+  const SearchResultsState({
+    required this.items,
+    required this.hasMore,
+    this.isLoadingMore = false,
+    this.loadMoreError,
+    this.loadMoreStackTrace,
+  });
+
+  final List<MediaItemEntity> items;
+  final bool hasMore;
+  final bool isLoadingMore;
+  final Object? loadMoreError;
+  final StackTrace? loadMoreStackTrace;
+
+  SearchResultsState copyWith({
+    List<MediaItemEntity>? items,
+    bool? hasMore,
+    bool? isLoadingMore,
+    Object? loadMoreError,
+    StackTrace? loadMoreStackTrace,
+    bool clearLoadMoreError = false,
+  }) {
+    return SearchResultsState(
+      items: items ?? this.items,
+      hasMore: hasMore ?? this.hasMore,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      loadMoreError: clearLoadMoreError
+          ? null
+          : loadMoreError ?? this.loadMoreError,
+      loadMoreStackTrace: clearLoadMoreError
+          ? null
+          : loadMoreStackTrace ?? this.loadMoreStackTrace,
+    );
+  }
+}
+
+class SearchResultsNotifier extends Notifier<AsyncValue<SearchResultsState>> {
+  SearchResultsNotifier(this._query);
+
+  static const _pageSize = 100;
+
+  final String _query;
+  int _loadGeneration = 0;
+
+  @override
+  AsyncValue<SearchResultsState> build() {
+    if (_query.trim().isEmpty) {
+      return const AsyncData(SearchResultsState(items: [], hasMore: false));
+    }
+    _loadInitial();
+    return const AsyncLoading();
+  }
+
+  Future<void> _loadInitial() async {
+    final generation = ++_loadGeneration;
+    final query = _query.trim();
+    if (query.isEmpty) {
+      state = const AsyncData(SearchResultsState(items: [], hasMore: false));
+      return;
+    }
+
+    try {
+      final items = await ref
+          .read(mediaRepositoryProvider)
+          .searchMedia(query, limit: _pageSize, offset: 0);
+      if (!ref.mounted || generation != _loadGeneration) return;
+      state = AsyncData(
+        SearchResultsState(items: items, hasMore: items.length == _pageSize),
+      );
+    } catch (error, stackTrace) {
+      if (!ref.mounted || generation != _loadGeneration) return;
+      state = AsyncError(error, stackTrace);
+    }
+  }
+
+  Future<void> refresh() {
+    if (_query.trim().isEmpty) {
+      state = const AsyncData(SearchResultsState(items: [], hasMore: false));
+      return Future.value();
+    }
+    state = const AsyncLoading();
+    return _loadInitial();
+  }
+
+  Future<void> loadMore() async {
+    final current = state.value;
+    if (current == null ||
+        !current.hasMore ||
+        current.isLoadingMore ||
+        state.isLoading) {
+      return;
+    }
+
+    final generation = _loadGeneration;
+    state = AsyncData(
+      current.copyWith(isLoadingMore: true, clearLoadMoreError: true),
+    );
+    try {
+      final newItems = await ref
+          .read(mediaRepositoryProvider)
+          .searchMedia(
+            _query.trim(),
+            limit: _pageSize,
+            offset: current.items.length,
+          );
+      if (!ref.mounted || generation != _loadGeneration) return;
+      state = AsyncData(
+        SearchResultsState(
+          items: [...current.items, ...newItems],
+          hasMore: newItems.length == _pageSize,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (!ref.mounted || generation != _loadGeneration) return;
+      state = AsyncData(
+        current.copyWith(
+          isLoadingMore: false,
+          loadMoreError: error,
+          loadMoreStackTrace: stackTrace,
+        ),
+      );
+    }
+  }
+}
 
 final timelineNotifierProvider =
     NotifierProvider<TimelineNotifier, AsyncValue<List<MediaItemEntity>>>(() {
-  return TimelineNotifier();
-});
+      return TimelineNotifier();
+    });
 
 class TimelineNotifier extends Notifier<AsyncValue<List<MediaItemEntity>>> {
   static const _pageSize = 50;
@@ -80,7 +207,9 @@ class TimelineNotifier extends Notifier<AsyncValue<List<MediaItemEntity>>> {
     final generation = _loadGeneration;
     final currentItems = state.value ?? [];
     try {
-      final newItems = await ref.read(mediaRepositoryProvider).getTimelineAfter(
+      final newItems = await ref
+          .read(mediaRepositoryProvider)
+          .getTimelineAfter(
             limit: _pageSize,
             beforeTimestamp: _beforeTimestamp,
             beforeId: _beforeId,
@@ -90,8 +219,9 @@ class TimelineNotifier extends Notifier<AsyncValue<List<MediaItemEntity>>> {
       _setCursor(newItems);
 
       final seenIds = currentItems.map((item) => item.id).toSet();
-      final uniqueNewItems =
-          newItems.where((item) => seenIds.add(item.id)).toList();
+      final uniqueNewItems = newItems
+          .where((item) => seenIds.add(item.id))
+          .toList();
       state = AsyncData([...currentItems, ...uniqueNewItems]);
     } catch (_) {
       // Retain the current page and cursor so the next scroll can retry.

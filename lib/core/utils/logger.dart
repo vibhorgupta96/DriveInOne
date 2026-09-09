@@ -17,7 +17,8 @@ class LogEntry {
   });
 
   String get formatted {
-    final time = '${timestamp.hour.toString().padLeft(2, '0')}:'
+    final time =
+        '${timestamp.hour.toString().padLeft(2, '0')}:'
         '${timestamp.minute.toString().padLeft(2, '0')}:'
         '${timestamp.second.toString().padLeft(2, '0')}';
     final err = error != null ? '\n  ↳ $error' : '';
@@ -48,15 +49,17 @@ class AppLogger {
 
   static void info(String message, {String? tag}) {
     developer.log(message, name: tag ?? 'DriveInOne');
-    _addEntry(LogEntry(
-      timestamp: DateTime.now(),
-      level: 'INFO',
-      message: message,
-    ));
+    _addEntry(
+      LogEntry(timestamp: DateTime.now(), level: 'INFO', message: message),
+    );
   }
 
-  static void error(String message,
-      {Object? error, StackTrace? stackTrace, String? tag}) {
+  static void error(
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+    String? tag,
+  }) {
     developer.log(
       message,
       name: tag ?? 'DriveInOne',
@@ -64,29 +67,27 @@ class AppLogger {
       stackTrace: stackTrace,
       level: 1000,
     );
-    _addEntry(LogEntry(
-      timestamp: DateTime.now(),
-      level: 'ERROR',
-      message: message,
-      error: error?.toString(),
-    ));
+    _addEntry(
+      LogEntry(
+        timestamp: DateTime.now(),
+        level: 'ERROR',
+        message: message,
+        error: error?.toString(),
+      ),
+    );
   }
 
   static void warning(String message, {String? tag}) {
     developer.log(message, name: tag ?? 'DriveInOne', level: 900);
-    _addEntry(LogEntry(
-      timestamp: DateTime.now(),
-      level: 'WARN',
-      message: message,
-    ));
+    _addEntry(
+      LogEntry(timestamp: DateTime.now(), level: 'WARN', message: message),
+    );
   }
 
   static void debug(String message, {String? tag}) {
     developer.log(message, name: tag ?? 'DriveInOne', level: 500);
-    _addEntry(LogEntry(
-      timestamp: DateTime.now(),
-      level: 'DEBUG',
-      message: message,
-    ));
+    _addEntry(
+      LogEntry(timestamp: DateTime.now(), level: 'DEBUG', message: message),
+    );
   }
 }

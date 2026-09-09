@@ -12,11 +12,18 @@ import 'cloud_provider.dart';
 
 class DropboxProvider extends CloudProvider {
   final FlutterAppAuth _appAuth = const FlutterAppAuth();
-  final Dio _apiDio = Dio(BaseOptions(
-    baseUrl: ProviderConstants.dropboxApiBaseUrl,
-    connectTimeout: const Duration(seconds: 30),
-    receiveTimeout: const Duration(seconds: 30),
-  ));
+  final Dio _apiDio;
+
+  DropboxProvider({Dio? apiDio})
+    : _apiDio =
+          apiDio ??
+          Dio(
+            BaseOptions(
+              baseUrl: ProviderConstants.dropboxApiBaseUrl,
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(seconds: 30),
+            ),
+          );
   @override
   String get providerId => 'dropbox';
 
@@ -57,10 +64,9 @@ class DropboxProvider extends CloudProvider {
       final headers = await getAuthHeaders();
       final profileResponse = await _apiDio.post(
         '/users/get_current_account',
-        options: Options(headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        }),
+        options: Options(
+          headers: {...headers, 'Content-Type': 'application/json'},
+        ),
         data: 'null',
       );
       final profile = profileResponse.data as Map<String, dynamic>;
@@ -111,7 +117,8 @@ class DropboxProvider extends CloudProvider {
     if (!force && !isTokenExpired && accessToken != null) return;
     if (refreshToken == null) {
       throw const AuthException(
-          message: 'No refresh token available for Dropbox');
+        message: 'No refresh token available for Dropbox',
+      );
     }
 
     final appKey = ProviderConstants.requireConfigured(
@@ -144,7 +151,9 @@ class DropboxProvider extends CloudProvider {
     } catch (e) {
       if (e is AuthException) rethrow;
       throw AuthException(
-          message: 'Dropbox token refresh failed', originalError: e);
+        message: 'Dropbox token refresh failed',
+        originalError: e,
+      );
     }
   }
 
@@ -153,6 +162,7 @@ class DropboxProvider extends CloudProvider {
     final headers = await getAuthHeaders();
     final changedItems = <MediaItemModel>[];
     final deletedIds = <String>[];
+    final orderedEvents = <SyncDeltaEvent>[];
 
     try {
       Map<String, dynamic> data;
@@ -165,10 +175,9 @@ class DropboxProvider extends CloudProvider {
         if (cursor == null) {
           response = await _apiDio.post(
             '/files/list_folder',
-            options: Options(headers: {
-              ...headers,
-              'Content-Type': 'application/json',
-            }),
+            options: Options(
+              headers: {...headers, 'Content-Type': 'application/json'},
+            ),
             data: jsonEncode({
               'path': '',
               'recursive': true,
@@ -180,10 +189,9 @@ class DropboxProvider extends CloudProvider {
         } else {
           response = await _apiDio.post(
             '/files/list_folder/continue',
-            options: Options(headers: {
-              ...headers,
-              'Content-Type': 'application/json',
-            }),
+            options: Options(
+              headers: {...headers, 'Content-Type': 'application/json'},
+            ),
             data: jsonEncode({'cursor': cursor}),
           );
         }
@@ -198,6 +206,9 @@ class DropboxProvider extends CloudProvider {
             final pathLower = entry['path_lower'] as String?;
             if (pathLower != null) {
               deletedIds.add(deletionKeyForPath(pathLower));
+              orderedEvents.add(
+                SyncDeltaEvent.deleted(deletionKeyForPath(pathLower)),
+              );
             }
             continue;
           }
@@ -215,7 +226,9 @@ class DropboxProvider extends CloudProvider {
 
           if (!isMedia) continue;
 
-          changedItems.add(_mapEntryToMediaItem(entry));
+          final item = _mapEntryToMediaItem(entry);
+          changedItems.add(item);
+          orderedEvents.add(SyncDeltaEvent.changed(item));
         }
 
         cursor = data['cursor'] as String?;
@@ -226,8 +239,15 @@ class DropboxProvider extends CloudProvider {
         changedItems: changedItems,
         deletedRemoteIds: deletedIds,
         newSyncToken: cursor,
+        orderedEvents: orderedEvents,
+        isFullSnapshot: syncToken == null,
       );
     } on DioException catch (e) {
+      // Only the documented reset cursor error can be replayed from root.
+      // Other 409s (for example malformed requests) must remain visible.
+      if (_isResetCursorError(e) && syncToken != null) {
+        return scanDelta(null);
+      }
       throw ApiException(
         message: 'Dropbox sync failed',
         statusCode: e.response?.statusCode,
@@ -236,15 +256,28 @@ class DropboxProvider extends CloudProvider {
     }
   }
 
+  static bool _isResetCursorError(DioException error) {
+    if (error.response?.statusCode != 409) return false;
+    final data = error.response?.data;
+    if (data is! Map) return false;
+
+    final summary = data['error_summary']?.toString().toLowerCase();
+    if (summary == 'reset' || summary?.startsWith('reset/') == true) {
+      return true;
+    }
+
+    final nestedError = data['error'];
+    return nestedError is Map && nestedError['.tag'] == 'reset';
+  }
+
   @override
   Future<String> getVideoStreamUrl(String fileId) async {
     final headers = await getAuthHeaders();
     final response = await _apiDio.post(
       '/files/get_temporary_link',
-      options: Options(headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      }),
+      options: Options(
+        headers: {...headers, 'Content-Type': 'application/json'},
+      ),
       data: jsonEncode({'path': fileId}),
     );
     return response.data['link'] as String? ?? '';
@@ -336,14 +369,15 @@ class DropboxProvider extends CloudProvider {
       fileName: name,
       mimeType: mimeType,
       mediaType: mediaType,
-      thumbnailUrl:
-          pathLower.isNotEmpty ? 'dropbox://thumbnail$pathLower' : null,
+      thumbnailUrl: pathLower.isNotEmpty
+          ? 'dropbox://thumbnail$pathLower'
+          : null,
       fullSizeUrl: null, // Requires temporary link
       width: dimensions?['width'] as int?,
       height: dimensions?['height'] as int?,
       fileSize: entry['size'] as int?,
       durationSeconds: duration,
-      fileHash: entry['content_hash'] as String?,
+      fileHash: entry['content_hash'] as String? ?? entry['rev'] as String?,
       timestamp: timestamp,
     );
   }

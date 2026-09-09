@@ -14,13 +14,13 @@ import 'sync_providers.dart';
 
 final cloudProviderFactoriesProvider =
     Provider<Map<ProviderType, CloudProviderFactory>>((ref) {
-  return {
-    ProviderType.google: ({String? accountId}) =>
-        GoogleDriveProvider(accountId: accountId),
-    ProviderType.onedrive: ({String? accountId}) => OneDriveProvider(),
-    ProviderType.dropbox: ({String? accountId}) => DropboxProvider(),
-  };
-});
+      return {
+        ProviderType.google: ({String? accountId}) =>
+            GoogleDriveProvider(accountId: accountId),
+        ProviderType.onedrive: ({String? accountId}) => OneDriveProvider(),
+        ProviderType.dropbox: ({String? accountId}) => DropboxProvider(),
+      };
+    });
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
@@ -38,8 +38,8 @@ final linkedAccountsProvider = StreamProvider<List<AccountEntity>>((ref) {
 
 final linkAccountProvider =
     NotifierProvider<LinkAccountNotifier, AsyncValue<void>>(() {
-  return LinkAccountNotifier();
-});
+      return LinkAccountNotifier();
+    });
 
 class LinkAccountNotifier extends Notifier<AsyncValue<void>> {
   @override

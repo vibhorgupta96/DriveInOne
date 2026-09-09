@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart';
 import '../../../core/constants/provider_constants.dart';
 import '../../../core/enums/provider_type.dart';
 import '../../../core/errors/exceptions.dart';
@@ -15,47 +16,63 @@ class GoogleDriveProvider extends CloudProvider {
   static Future<void>? _initialization;
 
   final String? accountId;
+  final GoogleSignInPlatform _signInPlatform;
+  final Future<void> Function()? _initializer;
   late final Dio _dio;
-  final Dio _retryDio = Dio();
+  final Dio _retryDio;
 
   GoogleSignInAccount? _currentUser;
   Future<void>? _refreshFuture;
 
-  GoogleDriveProvider({this.accountId}) {
-    _dio = Dio(BaseOptions(
-      baseUrl: ProviderConstants.googleDriveBaseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 30),
-    ));
-    _dio.interceptors.add(InterceptorsWrapper(
-      onError: (error, handler) async {
-        if (error.response?.statusCode == 401 &&
-            error.requestOptions.extra['googleAuthRetried'] != true) {
-          try {
-            if (_refreshFuture != null) {
-              await _refreshFuture;
-            } else {
-              final refresh = refreshTokenIfNeeded(force: true);
-              _refreshFuture = refresh;
-              try {
-                await refresh;
-              } finally {
-                _refreshFuture = null;
+  GoogleDriveProvider({
+    this.accountId,
+    Dio? dio,
+    Dio? retryDio,
+    GoogleSignInPlatform? signInPlatform,
+    Future<void> Function()? initializer,
+  }) : _retryDio = retryDio ?? Dio(),
+       _signInPlatform = signInPlatform ?? GoogleSignInPlatform.instance,
+       _initializer = initializer {
+    _dio =
+        dio ??
+        Dio(
+          BaseOptions(
+            baseUrl: ProviderConstants.googleDriveBaseUrl,
+            connectTimeout: const Duration(seconds: 30),
+            receiveTimeout: const Duration(seconds: 30),
+          ),
+        );
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onError: (error, handler) async {
+          if (error.response?.statusCode == 401 &&
+              error.requestOptions.extra['googleAuthRetried'] != true) {
+            try {
+              if (_refreshFuture != null) {
+                await _refreshFuture;
+              } else {
+                final refresh = refreshTokenIfNeeded(force: true);
+                _refreshFuture = refresh;
+                try {
+                  await refresh;
+                } finally {
+                  _refreshFuture = null;
+                }
               }
+              final headers = await getAuthHeaders();
+              final opts = error.requestOptions;
+              opts.extra['googleAuthRetried'] = true;
+              opts.headers.addAll(headers);
+              final response = await _retryDio.fetch(opts);
+              return handler.resolve(response);
+            } catch (e) {
+              return handler.next(error);
             }
-            final headers = await getAuthHeaders();
-            final opts = error.requestOptions;
-            opts.extra['googleAuthRetried'] = true;
-            opts.headers.addAll(headers);
-            final response = await _retryDio.fetch(opts);
-            return handler.resolve(response);
-          } catch (e) {
-            return handler.next(error);
           }
-        }
-        return handler.next(error);
-      },
-    ));
+          return handler.next(error);
+        },
+      ),
+    );
   }
 
   @override
@@ -65,6 +82,8 @@ class GoogleDriveProvider extends CloudProvider {
   ProviderType get providerType => ProviderType.google;
 
   Future<void> _ensureInitialized() async {
+    final initializer = _initializer;
+    if (initializer != null) return initializer();
     if (_initialization != null) return _initialization!;
 
     final webClientId = ProviderConstants.requireConfigured(
@@ -97,19 +116,17 @@ class GoogleDriveProvider extends CloudProvider {
       // This method is reached only from the explicit Link Account action, so
       // an interactive scope grant is allowed here if the combined flow did
       // not already authorize Drive.
-      final authz = await account.authorizationClient.authorizationForScopes(
-            [ProviderConstants.googleDriveScope],
-          ) ??
-          await account.authorizationClient.authorizeScopes(
-            [ProviderConstants.googleDriveScope],
-          );
+      final authz =
+          await account.authorizationClient.authorizationForScopes([
+            ProviderConstants.googleDriveScope,
+          ]) ??
+          await account.authorizationClient.authorizeScopes([
+            ProviderConstants.googleDriveScope,
+          ]);
       final token = authz.accessToken;
       final expiry = _estimatedGoogleExpiry();
 
-      setTokens(
-        accessToken: token,
-        expiry: expiry,
-      );
+      setTokens(accessToken: token, expiry: expiry);
 
       return AccountModel(
         id: 'google|${account.email}',
@@ -158,8 +175,39 @@ class GoogleDriveProvider extends CloudProvider {
         );
       } catch (error) {
         AppLogger.warning(
-            'Could not clear the cached Google access token: $error');
+          'Could not clear the cached Google access token: $error',
+        );
       }
+    }
+
+    // Android's platform implementation can ask Google Play services for an
+    // authorization token for this exact email without consulting the
+    // process-wide GoogleSignIn current user. That makes background refresh
+    // safe when more than one Google catalogue is linked.
+    final requestedEmail = _emailFromAccountId(accountId);
+    if (requestedEmail != null &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      final token = await _signInPlatform.clientAuthorizationTokensForScopes(
+        ClientAuthorizationTokensForScopesParameters(
+          request: AuthorizationRequestDetails(
+            scopes: const [ProviderConstants.googleDriveScope],
+            userId: null,
+            email: requestedEmail,
+            promptIfUnauthorized: false,
+          ),
+        ),
+      );
+      if (token != null && token.accessToken.isNotEmpty) {
+        setTokens(
+          accessToken: token.accessToken,
+          expiry: _estimatedGoogleExpiry(),
+        );
+        return;
+      }
+      throw AuthException(
+        message:
+            'Google authorization for $requestedEmail is unavailable. Please re-link this account.',
+      );
     }
 
     final account = _currentUser ?? await _restoreAccountSilently();
@@ -177,6 +225,12 @@ class GoogleDriveProvider extends CloudProvider {
       accessToken: authorization.accessToken,
       expiry: _estimatedGoogleExpiry(),
     );
+  }
+
+  static String? _emailFromAccountId(String? value) {
+    if (value == null || !value.startsWith('google|')) return null;
+    final email = value.substring('google|'.length).trim();
+    return email.isEmpty ? null : email;
   }
 
   Future<GoogleSignInAccount> _restoreAccountSilently() async {
@@ -212,12 +266,27 @@ class GoogleDriveProvider extends CloudProvider {
     final headers = await getAuthHeaders();
     final changedItems = <MediaItemModel>[];
     final deletedIds = <String>[];
+    final orderedEvents = <SyncDeltaEvent>[];
 
     AppLogger.info(
-        'Starting Google Drive scan (syncToken: ${syncToken != null ? "exists" : "null"})');
+      'Starting Google Drive scan (syncToken: ${syncToken != null ? "exists" : "null"})',
+    );
 
     try {
       if (syncToken == null) {
+        // Capture before enumeration. Files created, changed, or deleted while
+        // the paged listing is in progress are replayed from this point below.
+        final startPageResponse = await _dio.get(
+          '/changes/startPageToken',
+          options: Options(headers: headers),
+        );
+        final capturedStartToken =
+            startPageResponse.data['startPageToken'] as String?;
+        if (capturedStartToken == null || capturedStartToken.isEmpty) {
+          throw const ApiException(
+            message: 'Google Drive did not return a start page token',
+          );
+        }
         String? pageToken;
         do {
           final response = await _dio.get(
@@ -230,7 +299,7 @@ class GoogleDriveProvider extends CloudProvider {
                   'nextPageToken,files(id,name,mimeType,thumbnailLink,webContentLink,imageMediaMetadata,videoMediaMetadata,md5Checksum,createdTime,modifiedTime,size)',
               'pageSize': 100,
               'orderBy': 'createdTime desc',
-              if (pageToken != null) 'pageToken': pageToken,
+              'pageToken': ?pageToken,
             },
           );
 
@@ -239,22 +308,27 @@ class GoogleDriveProvider extends CloudProvider {
           AppLogger.info('Google Drive scan page: found ${files.length} files');
 
           for (final file in files) {
-            changedItems.add(_mapFileToMediaItem(file));
+            final item = _mapFileToMediaItem(file);
+            changedItems.add(item);
+            orderedEvents.add(SyncDeltaEvent.changed(item));
           }
 
           pageToken = data['nextPageToken'] as String?;
         } while (pageToken != null);
 
-        final startPageResponse = await _dio.get(
-          '/changes/startPageToken',
-          options: Options(headers: headers),
-        );
-        final newToken = startPageResponse.data['startPageToken'] as String?;
+        final raceDelta = await scanDelta(capturedStartToken);
+        // Later delta events override their corresponding listed records.
+        final initialEvents = <SyncDeltaEvent>[
+          ...orderedEvents,
+          ...raceDelta.orderedEvents,
+        ];
 
         return SyncResultModel(
-          changedItems: changedItems,
-          deletedRemoteIds: deletedIds,
-          newSyncToken: newToken,
+          changedItems: [...changedItems, ...raceDelta.changedItems],
+          deletedRemoteIds: raceDelta.deletedRemoteIds,
+          newSyncToken: raceDelta.newSyncToken ?? capturedStartToken,
+          orderedEvents: initialEvents,
+          isFullSnapshot: true,
         );
       } else {
         String? pageToken = syncToken;
@@ -282,12 +356,17 @@ class GoogleDriveProvider extends CloudProvider {
             final file = change['file'] as Map<String, dynamic>?;
 
             if (removed || file?['trashed'] == true) {
-              if (fileId != null) deletedIds.add(fileId);
+              if (fileId != null) {
+                deletedIds.add(fileId);
+                orderedEvents.add(SyncDeltaEvent.deleted(fileId));
+              }
             } else if (file != null) {
               final mimeType = file['mimeType'] as String? ?? '';
               if (mimeType.startsWith('image/') ||
                   mimeType.startsWith('video/')) {
-                changedItems.add(_mapFileToMediaItem(file));
+                final item = _mapFileToMediaItem(file);
+                changedItems.add(item);
+                orderedEvents.add(SyncDeltaEvent.changed(item));
               }
             }
           }
@@ -300,6 +379,8 @@ class GoogleDriveProvider extends CloudProvider {
           changedItems: changedItems,
           deletedRemoteIds: deletedIds,
           newSyncToken: newStartPageToken,
+          orderedEvents: orderedEvents,
+          isFullSnapshot: false,
         );
       }
     } on DioException catch (e) {
@@ -364,13 +445,18 @@ class GoogleDriveProvider extends CloudProvider {
       mediaType: MediaItemModel.mediaTypeFromMime(mimeType),
       thumbnailUrl: 'gdrive://thumb/${file['id'] as String}',
       fullSizeUrl: file['webContentLink'] as String?,
-      width: _parseInt(imageMetadata?['width']) ??
+      width:
+          _parseInt(imageMetadata?['width']) ??
           _parseInt(videoMetadata?['width']),
-      height: _parseInt(imageMetadata?['height']) ??
+      height:
+          _parseInt(imageMetadata?['height']) ??
           _parseInt(videoMetadata?['height']),
       fileSize: _parseInt(file['size']),
       durationSeconds: durationMillis != null ? durationMillis ~/ 1000 : null,
-      fileHash: file['md5Checksum'] as String?,
+      // Google-native files may not expose an MD5; modifiedTime is still a
+      // provider revision and invalidates stable marker thumbnails.
+      fileHash:
+          (file['md5Checksum'] as String?) ?? (file['modifiedTime'] as String?),
       timestamp: timestamp,
     );
   }

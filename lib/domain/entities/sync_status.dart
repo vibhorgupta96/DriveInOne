@@ -18,31 +18,31 @@ class SyncStatus extends Equatable {
   });
 
   const SyncStatus.idle({DateTime? lastSync})
-      : isSyncing = false,
-        currentAccountId = null,
-        itemsSynced = 0,
-        totalItems = 0,
-        error = null,
-        lastSyncTime = lastSync;
+    : isSyncing = false,
+      currentAccountId = null,
+      itemsSynced = 0,
+      totalItems = 0,
+      error = null,
+      lastSyncTime = lastSync;
 
   const SyncStatus.syncing({
     required String accountId,
     int synced = 0,
     int total = 0,
-  })  : isSyncing = true,
-        currentAccountId = accountId,
-        itemsSynced = synced,
-        totalItems = total,
-        error = null,
-        lastSyncTime = null;
+  }) : isSyncing = true,
+       currentAccountId = accountId,
+       itemsSynced = synced,
+       totalItems = total,
+       error = null,
+       lastSyncTime = null;
 
   const SyncStatus.error(String errorMessage)
-      : isSyncing = false,
-        currentAccountId = null,
-        itemsSynced = 0,
-        totalItems = 0,
-        error = errorMessage,
-        lastSyncTime = null;
+    : isSyncing = false,
+      currentAccountId = null,
+      itemsSynced = 0,
+      totalItems = 0,
+      error = errorMessage,
+      lastSyncTime = null;
 
   @override
   List<Object?> get props => [isSyncing, currentAccountId, itemsSynced, error];

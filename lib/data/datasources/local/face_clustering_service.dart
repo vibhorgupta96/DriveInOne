@@ -1,3 +1,4 @@
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
@@ -31,6 +32,91 @@ class ClusterResult {
   });
 }
 
+/// Immutable, isolate-safe input for [FaceClusteringService.clusterFacesInWorker].
+///
+/// It contains only face identifiers, embedding bytes, and primitive collection
+/// types, so database records and repository objects never cross the isolate
+/// boundary.
+class FaceClusteringWorkerInput {
+  const FaceClusteringWorkerInput({
+    required this.faces,
+    this.existingCentroids = const {},
+  });
+
+  factory FaceClusteringWorkerInput.fromFaces(
+    List<FaceModel> faces, {
+    Map<String, List<double>>? existingCentroids,
+  }) {
+    return FaceClusteringWorkerInput(
+      faces: [
+        for (final face in faces)
+          FaceClusteringWorkerFace(
+            id: face.id,
+            embedding: Uint8List.fromList(face.embedding),
+          ),
+      ],
+      existingCentroids: {
+        for (final entry
+            in (existingCentroids ?? const <String, List<double>>{}).entries)
+          entry.key: List<double>.from(entry.value, growable: false),
+      },
+    );
+  }
+
+  final List<FaceClusteringWorkerFace> faces;
+  final Map<String, List<double>> existingCentroids;
+}
+
+class FaceClusteringWorkerFace {
+  const FaceClusteringWorkerFace({required this.id, required this.embedding});
+
+  final String id;
+  final Uint8List embedding;
+}
+
+class FaceClusteringWorkerAssignment {
+  const FaceClusteringWorkerAssignment({
+    required this.faceId,
+    required this.clusterId,
+    required this.isNewCluster,
+  });
+
+  final String faceId;
+  final String clusterId;
+  final bool isNewCluster;
+}
+
+/// Immutable, isolate-safe output for [FaceClusteringService.clusterFacesInWorker].
+class FaceClusteringWorkerResult {
+  const FaceClusteringWorkerResult({
+    required this.assignments,
+    required this.clusterCentroids,
+    required this.clusterCounts,
+    required this.clusterRepresentatives,
+  });
+
+  final List<FaceClusteringWorkerAssignment> assignments;
+  final Map<String, Uint8List> clusterCentroids;
+  final Map<String, int> clusterCounts;
+  final Map<String, String> clusterRepresentatives;
+
+  ClusterResult toClusterResult() {
+    return ClusterResult(
+      assignments: [
+        for (final assignment in assignments)
+          ClusterAssignment(
+            faceId: assignment.faceId,
+            clusterId: assignment.clusterId,
+            isNewCluster: assignment.isNewCluster,
+          ),
+      ],
+      clusterCentroids: clusterCentroids,
+      clusterCounts: clusterCounts,
+      clusterRepresentatives: clusterRepresentatives,
+    );
+  }
+}
+
 class FaceClusteringService {
   static const _uuid = Uuid();
 
@@ -41,77 +127,116 @@ class FaceClusteringService {
     List<FaceModel> faces, {
     Map<String, List<double>>? existingCentroids,
   }) {
+    return _cluster(
+      FaceClusteringWorkerInput.fromFaces(
+        faces,
+        existingCentroids: existingCentroids,
+      ),
+    ).toClusterResult();
+  }
+
+  /// Runs the same deterministic clustering algorithm away from the UI isolate.
+  ///
+  /// [FaceClusteringWorkerInput] and [FaceClusteringWorkerResult] deliberately
+  /// contain only sendable values. Callers can convert the result with
+  /// [FaceClusteringWorkerResult.toClusterResult] before persisting it.
+  Future<FaceClusteringWorkerResult> clusterFacesInWorker(
+    FaceClusteringWorkerInput input,
+  ) {
+    return Isolate.run(() => faceClusteringWorkerEntry(input));
+  }
+
+  FaceClusteringWorkerResult _cluster(FaceClusteringWorkerInput input) {
     const threshold = AppConstants.faceSimilarityThreshold;
-    final clusters = <String, List<FaceModel>>{}; // clusterId -> faces
-    final centroids = <String, List<double>>{}; // clusterId -> centroid
+    final members = <String, List<FaceClusteringWorkerFace>>{};
+    final matchingCentroids = <String, List<double>>{};
+    final rawSums = <String, List<double>>{};
+    final counts = <String, int>{};
 
     // Initialize with existing centroids if provided
-    if (existingCentroids != null) {
-      centroids.addAll(existingCentroids);
-      for (final clusterId in existingCentroids.keys) {
-        clusters[clusterId] = [];
-      }
+    for (final entry in input.existingCentroids.entries) {
+      matchingCentroids[entry.key] = List<double>.from(
+        entry.value,
+        growable: false,
+      );
+      // Existing clusters have no member vectors in this run. Their centroid
+      // guides the first match, but it must not be treated as one of the new
+      // faces when calculating this run's raw aggregate and count.
+      rawSums[entry.key] = List<double>.filled(entry.value.length, 0);
+      counts[entry.key] = 0;
+      members[entry.key] = [];
     }
 
-    final assignments = <ClusterAssignment>[];
+    final assignments = <FaceClusteringWorkerAssignment>[];
 
-    for (final face in faces) {
+    for (final face in input.faces) {
       final embedding = FaceEmbeddingService.bytesToEmbedding(face.embedding);
 
       String? bestCluster;
       double bestSimilarity = 0;
 
-      for (final entry in centroids.entries) {
-        final sim = _cosineSimilarity(embedding, entry.value);
-        if (sim > bestSimilarity && sim > threshold) {
-          bestSimilarity = sim;
+      for (final entry in matchingCentroids.entries) {
+        final similarity = _cosineSimilarity(embedding, entry.value);
+        if (similarity > bestSimilarity && similarity > threshold) {
+          bestSimilarity = similarity;
           bestCluster = entry.key;
         }
       }
 
       if (bestCluster != null) {
-        clusters[bestCluster]!.add(face);
-        // Update centroid as running average
-        final allEmbeddings = clusters[bestCluster]!
-            .map((f) => FaceEmbeddingService.bytesToEmbedding(f.embedding))
-            .toList();
-        centroids[bestCluster] = _averageEmbeddings(allEmbeddings);
+        final clusterMembers = members[bestCluster]!;
+        final rawSum = rawSums[bestCluster]!;
+        clusterMembers.add(face);
+        for (var index = 0; index < embedding.length; index++) {
+          rawSum[index] += embedding[index];
+        }
+        counts[bestCluster] = counts[bestCluster]! + 1;
+        matchingCentroids[bestCluster] = rawSum;
 
-        assignments.add(ClusterAssignment(
-          faceId: face.id,
-          clusterId: bestCluster,
-        ));
+        assignments.add(
+          FaceClusteringWorkerAssignment(
+            faceId: face.id,
+            clusterId: bestCluster,
+            isNewCluster: false,
+          ),
+        );
       } else {
         final newClusterId = _uuid.v4();
-        clusters[newClusterId] = [face];
-        centroids[newClusterId] = embedding;
+        final rawSum = List<double>.from(embedding, growable: false);
+        members[newClusterId] = [face];
+        rawSums[newClusterId] = rawSum;
+        matchingCentroids[newClusterId] = rawSum;
+        counts[newClusterId] = 1;
 
-        assignments.add(ClusterAssignment(
-          faceId: face.id,
-          clusterId: newClusterId,
-          isNewCluster: true,
-        ));
+        assignments.add(
+          FaceClusteringWorkerAssignment(
+            faceId: face.id,
+            clusterId: newClusterId,
+            isNewCluster: true,
+          ),
+        );
       }
     }
 
     // Build result
     final centroidBytes = <String, Uint8List>{};
-    final counts = <String, int>{};
     final representatives = <String, String>{};
 
-    for (final entry in clusters.entries) {
+    for (final entry in members.entries) {
       if (entry.value.isEmpty) continue;
       centroidBytes[entry.key] = FaceEmbeddingService.embeddingToBytes(
-        centroids[entry.key]!,
+        _normalizedCopy(rawSums[entry.key]!),
       );
-      counts[entry.key] = entry.value.length;
       representatives[entry.key] = entry.value.first.id;
     }
 
-    return ClusterResult(
+    return FaceClusteringWorkerResult(
       assignments: assignments,
       clusterCentroids: centroidBytes,
-      clusterCounts: counts,
+      clusterCounts: {
+        for (final entry in counts.entries)
+          if (entry.value > 0) entry.key: entry.value,
+      },
       clusterRepresentatives: representatives,
     );
   }
@@ -129,25 +254,22 @@ class FaceClusteringService {
     return dot / denom;
   }
 
-  List<double> _averageEmbeddings(List<List<double>> embeddings) {
-    if (embeddings.isEmpty) return [];
-    final dim = embeddings.first.length;
-    final avg = List.filled(dim, 0.0);
-    for (final emb in embeddings) {
-      for (int i = 0; i < dim; i++) {
-        avg[i] += emb[i];
-      }
-    }
-    for (int i = 0; i < dim; i++) {
-      avg[i] /= embeddings.length;
-    }
-    // L2 normalize the centroid
-    final norm = sqrt(avg.fold(0.0, (sum, v) => sum + v * v));
+  List<double> _normalizedCopy(List<double> values) {
+    final normalized = List<double>.from(values, growable: false);
+    final norm = sqrt(normalized.fold(0.0, (sum, v) => sum + v * v));
     if (norm > 0) {
-      for (int i = 0; i < dim; i++) {
-        avg[i] /= norm;
+      for (int i = 0; i < normalized.length; i++) {
+        normalized[i] /= norm;
       }
     }
-    return avg;
+    return normalized;
   }
+}
+
+/// Top-level isolate entry point; it must remain free of repository or database
+/// state so [FaceClusteringWorkerInput] can cross isolate boundaries safely.
+FaceClusteringWorkerResult faceClusteringWorkerEntry(
+  FaceClusteringWorkerInput input,
+) {
+  return FaceClusteringService()._cluster(input);
 }

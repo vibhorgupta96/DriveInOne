@@ -26,8 +26,10 @@ class ImageUtils {
     final clampedLeft = (left - padX).clamp(0, image.width - 1);
     final clampedTop = (top - padY).clamp(0, image.height - 1);
     final clampedWidth = (width + padX * 2).clamp(1, image.width - clampedLeft);
-    final clampedHeight =
-        (height + padY * 2).clamp(1, image.height - clampedTop);
+    final clampedHeight = (height + padY * 2).clamp(
+      1,
+      image.height - clampedTop,
+    );
 
     final cropped = img.copyCrop(
       image,
@@ -86,8 +88,10 @@ class ImageUtils {
     return Uint8List.fromList(img.encodePng(cropped));
   }
 
-  static Float32List preprocessFaceForModel(Uint8List faceBytes,
-      {int size = 112}) {
+  static Float32List preprocessFaceForModel(
+    Uint8List faceBytes, {
+    int size = 112,
+  }) {
     final image = img.decodeImage(faceBytes);
     if (image == null) return Float32List(size * size * 3);
 

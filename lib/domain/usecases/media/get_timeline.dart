@@ -6,7 +6,8 @@ class GetTimeline {
 
   const GetTimeline(this._repository);
 
-  Future<List<MediaItemEntity>> call(
-          {required int limit, required int offset}) =>
-      _repository.getTimeline(limit: limit, offset: offset);
+  Future<List<MediaItemEntity>> call({
+    required int limit,
+    required int offset,
+  }) => _repository.getTimeline(limit: limit, offset: offset);
 }

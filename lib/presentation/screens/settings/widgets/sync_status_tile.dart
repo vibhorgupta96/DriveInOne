@@ -32,8 +32,10 @@ class SyncStatusTile extends StatelessWidget {
 
     if (status!.error != null) {
       return ListTile(
-        leading: Icon(Icons.error_outline,
-            color: Theme.of(context).colorScheme.error),
+        leading: Icon(
+          Icons.error_outline,
+          color: Theme.of(context).colorScheme.error,
+        ),
         title: const Text('Sync error'),
         subtitle: Text(
           status!.error!,

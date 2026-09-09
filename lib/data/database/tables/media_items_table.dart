@@ -26,11 +26,8 @@ class MediaItems extends Table {
 
   @override
   List<Set<Column>> get uniqueKeys => [
-        {accountId, remoteId},
-      ];
+    {accountId, remoteId},
+  ];
 }
 
-enum MediaTypeEnum {
-  photo,
-  video,
-}
+enum MediaTypeEnum { photo, video }

@@ -16,7 +16,9 @@ class SecureStorageSource {
     await _storage.write(key: '${accountId}_access_token', value: accessToken);
     if (refreshToken != null) {
       await _storage.write(
-          key: '${accountId}_refresh_token', value: refreshToken);
+        key: '${accountId}_refresh_token',
+        value: refreshToken,
+      );
     } else {
       await _storage.delete(key: '${accountId}_refresh_token');
     }

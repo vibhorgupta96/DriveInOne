@@ -10,6 +10,8 @@ import '../database/app_database.dart';
 import '../database/daos/accounts_dao.dart';
 import '../datasources/cloud/cloud_provider.dart';
 import '../datasources/local/secure_storage_source.dart';
+import '../datasources/local/account_operation_gate.dart';
+import '../datasources/local/thumbnail_resolver.dart';
 import 'package:drift/drift.dart';
 
 class AuthRepositoryImpl implements AuthRepository {
@@ -37,24 +39,39 @@ class AuthRepositoryImpl implements AuthRepository {
   Future<AccountEntity> linkAccount(ProviderType type) async {
     final provider = _createProvider(type);
     final accountModel = await provider.login();
+    // A reconnect supersedes every in-flight refresh for this identity before
+    // queuing its newly issued credentials and account metadata.
+    AccountOperationGate.retire(accountModel.id);
+    final generation = AccountOperationGate.generationFor(accountModel.id);
 
-    // Store tokens securely
-    await secureStorage.saveTokens(
-      accountId: accountModel.id,
-      accessToken: accountModel.accessToken,
-      refreshToken: accountModel.refreshToken,
-      expiry: accountModel.tokenExpiry,
+    final committed = await AccountOperationGate.runIfCurrent<bool>(
+      accountModel.id,
+      generation,
+      () async {
+        await secureStorage.saveTokens(
+          accountId: accountModel.id,
+          accessToken: accountModel.accessToken,
+          refreshToken: accountModel.refreshToken,
+          expiry: accountModel.tokenExpiry,
+        );
+        await accountsDao.insertAccount(
+          AccountsCompanion(
+            id: Value(accountModel.id),
+            providerType: Value(type.toDbEnum()),
+            email: Value(accountModel.email),
+            displayName: Value(accountModel.displayName),
+            avatarUrl: Value(accountModel.avatarUrl),
+            tokenExpiry: Value(accountModel.tokenExpiry),
+          ),
+        );
+        return true;
+      },
     );
-
-    // Save account metadata to database
-    await accountsDao.insertAccount(AccountsCompanion(
-      id: Value(accountModel.id),
-      providerType: Value(type.toDbEnum()),
-      email: Value(accountModel.email),
-      displayName: Value(accountModel.displayName),
-      avatarUrl: Value(accountModel.avatarUrl),
-      tokenExpiry: Value(accountModel.tokenExpiry),
-    ));
+    if (committed != true) {
+      throw const AuthException(
+        message: 'Account linking was cancelled because the account changed',
+      );
+    }
 
     return AccountEntity(
       id: accountModel.id,
@@ -74,19 +91,27 @@ class AuthRepositoryImpl implements AuthRepository {
 
     final providerType = account.providerType.toDomain();
     final provider = _createProvider(providerType, accountId: accountId);
-
-    try {
-      await _restoreProviderTokens(accountId, provider);
-      await provider.logout();
-    } catch (error, stackTrace) {
-      AppLogger.error(
-        'Remote logout failed for $accountId; continuing local unlink',
-        error: error,
-        stackTrace: stackTrace,
-      );
+    Future<void> remoteLogout() async {
+      try {
+        await _restoreProviderTokens(accountId, provider);
+        await provider.logout();
+      } catch (error, stackTrace) {
+        AppLogger.error(
+          'Remote logout failed for $accountId; continuing local unlink',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
     }
-    await secureStorage.deleteTokens(accountId);
-    await db.deleteAccountData(accountId);
+
+    // Reserve local cleanup at retirement time. A new link for this account
+    // queues behind it, including while remote logout is in flight.
+    await AccountOperationGate.retireAndRunExclusive(accountId, () async {
+      await remoteLogout();
+      await secureStorage.deleteTokens(accountId);
+      await db.deleteAccountData(accountId);
+      await ThumbnailResolver().purgeAccount(accountId);
+    });
   }
 
   @override
@@ -98,8 +123,8 @@ class AuthRepositoryImpl implements AuthRepository {
   @override
   Stream<List<AccountEntity>> watchLinkedAccounts() {
     return accountsDao.watchAllAccounts().map(
-          (accounts) => accounts.map<AccountEntity>(_mapToEntity).toList(),
-        );
+      (accounts) => accounts.map<AccountEntity>(_mapToEntity).toList(),
+    );
   }
 
   @override
@@ -111,9 +136,10 @@ class AuthRepositoryImpl implements AuthRepository {
 
     final providerType = account.providerType.toDomain();
     final provider = _createProvider(providerType, accountId: accountId);
+    final generation = AccountOperationGate.generationFor(accountId);
     await _restoreProviderTokens(accountId, provider);
     final headers = await provider.getAuthHeaders();
-    await _persistProviderTokens(accountId, provider);
+    await _persistProviderTokens(accountId, provider, generation: generation);
     return headers;
   }
 
@@ -129,6 +155,7 @@ class AuthRepositoryImpl implements AuthRepository {
       providerType,
       accountId: mediaItem.accountId,
     );
+    final generation = AccountOperationGate.generationFor(mediaItem.accountId);
     await _restoreProviderTokens(mediaItem.accountId, provider);
 
     final url = await provider.getVideoStreamUrl(mediaItem.remoteId);
@@ -144,7 +171,11 @@ class AuthRepositoryImpl implements AuthRepository {
     final headers = providerType == ProviderType.google
         ? await provider.getAuthHeaders()
         : const <String, String>{};
-    await _persistProviderTokens(mediaItem.accountId, provider);
+    await _persistProviderTokens(
+      mediaItem.accountId,
+      provider,
+      generation: generation,
+    );
     return ResolvedMedia(uri: uri, headers: headers);
   }
 
@@ -155,14 +186,17 @@ class AuthRepositoryImpl implements AuthRepository {
 
     final providerType = account.providerType.toDomain();
     final provider = _createProvider(providerType, accountId: accountId);
+    final generation = AccountOperationGate.generationFor(accountId);
     await _restoreProviderTokens(accountId, provider);
     await provider.refreshTokenIfNeeded();
 
-    await _persistProviderTokens(accountId, provider);
+    await _persistProviderTokens(accountId, provider, generation: generation);
   }
 
   Future<void> _restoreProviderTokens(
-      String accountId, CloudProvider provider) async {
+    String accountId,
+    CloudProvider provider,
+  ) async {
     final accessToken = await secureStorage.getAccessToken(accountId);
     final refreshToken = await secureStorage.getRefreshToken(accountId);
     final expiry = await secureStorage.getTokenExpiry(accountId);
@@ -181,15 +215,24 @@ class AuthRepositoryImpl implements AuthRepository {
 
   Future<void> _persistProviderTokens(
     String accountId,
-    CloudProvider provider,
-  ) async {
+    CloudProvider provider, {
+    int? generation,
+  }) async {
+    if (generation != null &&
+        !AccountOperationGate.isCurrent(accountId, generation)) {
+      return;
+    }
     final token = provider.accessToken;
     if (token == null) return;
-    await secureStorage.saveTokens(
-      accountId: accountId,
-      accessToken: token,
-      refreshToken: provider.refreshToken,
-      expiry: provider.tokenExpiry,
+    await AccountOperationGate.runIfCurrent(
+      accountId,
+      generation ?? AccountOperationGate.generationFor(accountId),
+      () => secureStorage.saveTokens(
+        accountId: accountId,
+        accessToken: token,
+        refreshToken: provider.refreshToken,
+        expiry: provider.tokenExpiry,
+      ),
     );
   }
 

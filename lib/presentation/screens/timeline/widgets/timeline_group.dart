@@ -4,11 +4,7 @@ class TimelineGroup extends StatelessWidget {
   final String label;
   final int count;
 
-  const TimelineGroup({
-    super.key,
-    required this.label,
-    required this.count,
-  });
+  const TimelineGroup({super.key, required this.label, required this.count});
 
   @override
   Widget build(BuildContext context) {
@@ -18,16 +14,16 @@ class TimelineGroup extends StatelessWidget {
         children: [
           Text(
             label,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(width: 8),
           Text(
             '$count',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.outline,
-                ),
+              color: Theme.of(context).colorScheme.outline,
+            ),
           ),
         ],
       ),

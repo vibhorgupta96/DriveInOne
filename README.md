@@ -12,7 +12,7 @@
   <a href="https://github.com/vibhorgupta96/DriveInOne/releases/latest">
     <img src="https://img.shields.io/github/v/release/vibhorgupta96/DriveInOne?label=Download%20APK&style=for-the-badge" alt="Download APK" />
   </a>
-  <img src="https://img.shields.io/badge/Flutter-%3E%3D3.16-02569B?style=for-the-badge&logo=flutter" alt="Flutter" />
+  <img src="https://img.shields.io/badge/Flutter-%3E%3D3.35-02569B?style=for-the-badge&logo=flutter" alt="Flutter" />
   <img src="https://img.shields.io/github/license/vibhorgupta96/DriveInOne?style=for-the-badge" alt="License" />
 </p>
 
@@ -78,8 +78,9 @@ lib/
 
 ### Prerequisites
 
-- Flutter >= 3.16.0
-- Dart SDK >= 3.2.0
+- Flutter >= 3.35.0
+- Dart SDK >= 3.9.0
+- iOS >= 15.5 (required by the ML Kit face detection dependency)
 
 ### Setup
 

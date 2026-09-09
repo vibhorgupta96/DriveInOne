@@ -27,13 +27,13 @@ class AppDatabase extends _$AppDatabase {
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (Migrator m) async {
-          await m.createAll();
-        },
-        onUpgrade: (Migrator m, int from, int to) async {
-          // Future migrations
-        },
-      );
+    onCreate: (Migrator m) async {
+      await m.createAll();
+    },
+    onUpgrade: (Migrator m, int from, int to) async {
+      // Future migrations
+    },
+  );
 
   /// Removes an account and every locally derived record in one transaction.
   ///
@@ -59,35 +59,37 @@ class AppDatabase extends _$AppDatabase {
         variables: [Variable<String>(accountId)],
         updates: {faces},
       );
-      await (delete(mediaItems)
-            ..where((media) => media.accountId.equals(accountId)))
-          .go();
+      await (delete(
+        mediaItems,
+      )..where((media) => media.accountId.equals(accountId))).go();
 
       for (final clusterId in affectedClusterIds) {
-        final remainingFaces = await (select(faces)
-              ..where((face) => face.clusterId.equals(clusterId))
-              ..orderBy([(face) => OrderingTerm.asc(face.detectedAt)]))
-            .get();
+        final remainingFaces =
+            await (select(faces)
+                  ..where((face) => face.clusterId.equals(clusterId))
+                  ..orderBy([(face) => OrderingTerm.asc(face.detectedAt)]))
+                .get();
         if (remainingFaces.isEmpty) {
-          await (delete(faceClusters)
-                ..where((cluster) => cluster.id.equals(clusterId)))
-              .go();
+          await (delete(
+            faceClusters,
+          )..where((cluster) => cluster.id.equals(clusterId))).go();
           continue;
         }
 
-        final cluster = await (select(faceClusters)
-              ..where((candidate) => candidate.id.equals(clusterId)))
-            .getSingleOrNull();
+        final cluster =
+            await (select(faceClusters)
+                  ..where((candidate) => candidate.id.equals(clusterId)))
+                .getSingleOrNull();
         if (cluster == null) continue;
 
         final remainingIds = remainingFaces.map((face) => face.id).toSet();
         final representativeId =
             remainingIds.contains(cluster.representativeFaceId)
-                ? cluster.representativeFaceId
-                : remainingFaces.first.id;
-        await (update(faceClusters)
-              ..where((candidate) => candidate.id.equals(clusterId)))
-            .write(
+            ? cluster.representativeFaceId
+            : remainingFaces.first.id;
+        await (update(
+          faceClusters,
+        )..where((candidate) => candidate.id.equals(clusterId))).write(
           FaceClustersCompanion(
             representativeFaceId: Value(representativeId),
             centroidEmbedding: Value(_averageEmbedding(remainingFaces)),
@@ -96,8 +98,9 @@ class AppDatabase extends _$AppDatabase {
         );
       }
 
-      await (delete(accounts)..where((account) => account.id.equals(accountId)))
-          .go();
+      await (delete(
+        accounts,
+      )..where((account) => account.id.equals(accountId))).go();
     });
   }
 

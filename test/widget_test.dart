@@ -7,8 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('new users are routed from splash to account setup',
-      (tester) async {
+  testWidgets('new users are routed from splash to account setup', (
+    tester,
+  ) async {
     final database = AppDatabase(NativeDatabase.memory());
     try {
       await tester.pumpWidget(

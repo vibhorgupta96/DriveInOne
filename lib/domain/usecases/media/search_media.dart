@@ -10,6 +10,5 @@ class SearchMedia {
     String query, {
     int limit = 100,
     int offset = 0,
-  }) =>
-      _repository.searchMedia(query, limit: limit, offset: offset);
+  }) => _repository.searchMedia(query, limit: limit, offset: offset);
 }

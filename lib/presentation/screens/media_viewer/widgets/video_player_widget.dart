@@ -105,8 +105,6 @@ class _SecureVideoPlayerState extends ConsumerState<SecureVideoPlayer> {
       );
     }
 
-    return Center(
-      child: Chewie(controller: _chewieController!),
-    );
+    return Center(child: Chewie(controller: _chewieController!));
   }
 }

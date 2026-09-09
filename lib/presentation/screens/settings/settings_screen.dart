@@ -39,20 +39,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (result.accountOutcomes.isEmpty) {
       message = 'No linked accounts to sync.';
     } else if (result.allFailed) {
-      message = 'Sync failed for ${failed.length} '
+      message =
+          'Sync failed for ${failed.length} '
           'account${failed.length == 1 ? '' : 's'}: ${_failureSummary(failed)}';
       backgroundColor = AppColors.error;
     } else if (result.isPartialSuccess) {
-      message = 'Synced ${result.itemsSynced} items'
+      message =
+          'Synced ${result.itemsSynced} items'
           '${result.itemsDeleted > 0 ? ', removed ${result.itemsDeleted}' : ''}. '
           '${failed.length} of ${result.accountOutcomes.length} accounts failed: '
           '${_failureSummary(failed)}';
       backgroundColor = AppColors.warning;
     } else if (result.itemsSynced == 0 && result.itemsDeleted == 0) {
-      message = '${successful.length} '
+      message =
+          '${successful.length} '
           'account${successful.length == 1 ? ' is' : 's are'} up to date.';
     } else {
-      message = 'Synced ${result.itemsSynced} items'
+      message =
+          'Synced ${result.itemsSynced} items'
           '${result.itemsDeleted > 0 ? ', removed ${result.itemsDeleted}' : ''} '
           'from ${successful.length} account${successful.length == 1 ? '' : 's'}.';
     }
@@ -70,8 +74,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _failureSummary(List<AccountSyncOutcome> failed) {
     return failed
         .take(2)
-        .map((outcome) =>
-            '${outcome.accountLabel}: ${outcome.errorMessage ?? 'Unknown error'}')
+        .map(
+          (outcome) =>
+              '${outcome.accountLabel}: ${outcome.errorMessage ?? 'Unknown error'}',
+        )
         .join('; ');
   }
 
@@ -136,10 +142,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               }
               return Column(
                 children: accts
-                    .map((a) => AccountTile(
-                          account: a,
-                          onUnlink: () => _confirmUnlink(a.id, a.email),
-                        ))
+                    .map(
+                      (a) => AccountTile(
+                        account: a,
+                        onUnlink: () => _confirmUnlink(a.id, a.email),
+                      ),
+                    )
                     .toList(),
               );
             },
@@ -195,8 +203,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   )
                 : const Icon(Icons.sync),
             title: const Text('Sync Now'),
-            subtitle:
-                const Text('Fetch new photos and videos from all accounts'),
+            subtitle: const Text(
+              'Fetch new photos and videos from all accounts',
+            ),
             onTap: syncState.isLoading
                 ? null
                 : () => ref.read(syncNotifierProvider.notifier).syncAll(),
@@ -222,7 +231,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => _showMediaStatsSheet(),
             ),
             loading: () => const SizedBox.shrink(),
-            error: (_, __) => const SizedBox.shrink(),
+            error: (_, _) => const SizedBox.shrink(),
           ),
 
           const Divider(height: 32),
@@ -249,9 +258,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Text(
         title,
         style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.w600,
-            ),
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -321,8 +330,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       Text(
                         'Media Stats',
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
+                          fontWeight: FontWeight.bold,
+                        ),
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 20),
@@ -353,9 +362,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(height: 24),
                         Text(
                           'By Account',
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleSmall
+                          style: Theme.of(context).textTheme.titleSmall
                               ?.copyWith(
                                 color: Theme.of(context).colorScheme.primary,
                                 fontWeight: FontWeight.w600,
@@ -367,7 +374,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           final photos = accountStats?.photos ?? 0;
                           final videos = accountStats?.videos ?? 0;
                           return _accountStatsRow(
-                              context, account, photos, videos);
+                            context,
+                            account,
+                            photos,
+                            videos,
+                          );
                         }),
                       ],
                       const SizedBox(height: 20),
@@ -410,16 +421,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           Text(
             value,
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
           ),
           const SizedBox(height: 2),
           Text(
             label,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -444,16 +455,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               children: [
                 Text(
                   account.email,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w500,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   account.providerType.displayName,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -489,7 +500,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Unlink Account'),
         content: Text(
-            'Are you sure you want to unlink $email? Media from this account will be removed from the gallery.'),
+          'Are you sure you want to unlink $email? Media from this account will be removed from the gallery.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
